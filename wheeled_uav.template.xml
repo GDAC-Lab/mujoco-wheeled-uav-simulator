@@ -1,0 +1,56 @@
+<mujoco>
+  <compiler balanceinertia="true"/>
+  <statistic extent="__STATISTIC_EXTENT__" center="__STATISTIC_CENTER__"/>
+  <option gravity="__GRAVITY__" timestep="__TIMESTEP__" iterations="__OPTION_ITERATIONS__" noslip_iterations="__OPTION_NOSLIP_ITERATIONS__"__OPTION_EXTRA_ATTRS__/>
+  <visual>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.65 0.65 0.65" specular="0.2 0.2 0.2"/>
+    <!-- Offscreen framebuffer size, used only by the FrameRecorder's mujoco.Renderer.
+         The default is 640x480; enlarge it so recordings up to 1920x1080 are possible.
+         No effect on the physics or the interactive viewer. -->
+    <global offwidth="1920" offheight="1080"/>
+    <!-- Contact visualization sizing (recording show_contacts, or the viewer toggle).
+         Arrow length = force * map.force / mean body mass, sized so a few-newton
+         contact renders clearly; contact discs shrunk from the defaults so they
+         mark the contact without hiding the wheels. -->
+    <map force="0.06"/>
+    <scale contactwidth="0.08" contactheight="0.03"/>
+  </visual>
+
+  <default>
+    <motor ctrllimited="true" ctrlrange="0 __MAX_ROTOR_THRUST__"/>
+  </default>
+
+  <asset>
+    <texture type="2d" name="checker" builtin="checker" rgb1=".34 .40 .46" rgb2=".22 .27 .32" width="512" height="512"/>
+    <material name="floor_mat" texture="checker" texrepeat="5 5" texuniform="true" specular="0.15" shininess="0.2" rgba="1 1 1 1"/>
+__MESH_ASSET_BLOCK__
+__SURFACE_ASSET_BLOCK__
+  </asset>
+
+  <worldbody>
+    <light ambient=".2 .2 .2" diffuse="1 1 1" pos="0 0 3.5" dir="0 0 -1"/>
+    <light ambient=".08 .08 .08" diffuse=".55 .55 .55" pos="-2 -1 4" dir="0.35 0.2 -1"/>
+__SURFACE_GEOM_BLOCK__
+
+    <body name="wall" pos="__WALL_POS__">
+      <!-- The geom name must match paths.WALL_GEOM_NAME: contact reporting keys
+           the "wall" contact-summary group off it, and the log review scripts
+           match it by name. -->
+      <geom name="wall_geom" type="box" size="__WALL_SIZE__" euler="__WALL_EULER__" condim="__WALL_CONDIM__" rgba="__WALL_RGBA__" solref="__WALL_SOLREF__"__WALL_EXTRA_ATTRS__ friction="__WALL_FRICTION__" contype="__WALL_CONTYPE__" conaffinity="__WALL_CONAFFINITY__"/>
+    </body>
+
+__WALL_GUIDE_BLOCK__
+
+__WALL_OVERLAY_BLOCK__
+
+__DRONE_BODY_BLOCK__
+  </worldbody>
+
+  <actuator>
+__ACTUATOR_BLOCK__
+  </actuator>
+
+  <sensor>
+__SENSOR_BLOCK__
+  </sensor>
+</mujoco>

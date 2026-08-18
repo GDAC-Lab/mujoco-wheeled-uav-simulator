@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: "mujoco-wheeled-uav-simulator"
+type: software
+authors:
+  - name: "GDAC-Lab"
+version: "1.1.0"
+license: "MIT"
+repository-code: "https://github.com/GDAC-Lab/mujoco-wheeled-uav-simulator"
+keywords:
+  - MuJoCo
+  - UAV
+  - quadrotor
+  - simulator
+  - MATLAB
+  - Python

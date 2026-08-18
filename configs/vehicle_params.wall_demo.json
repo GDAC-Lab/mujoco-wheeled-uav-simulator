@@ -1,0 +1,407 @@
+{
+  "fidelity_mode": "baseline",
+  "network_fidelity": {
+    "enabled": false,
+    "state_tx_latency_ms": 0.0,
+    "command_rx_latency_ms": 0.0,
+    "packet_loss_percent": 0.0,
+    "jitter_std_dev_ms": 0.0,
+    "stale_command_threshold_ms": null,
+    "stale_command_policy": "hold-last-command"
+  },
+  "actuator_dynamics": {
+    "motor_tau_ms": 0.0,
+    "thrust_rate_limit_n_per_s": null,
+    "omega_rate_limit_rad_per_s": null
+  },
+  "sensor_fidelity": {
+    "position_noise_std_m": 0.0,
+    "velocity_noise_std_m_per_s": 0.0,
+    "angular_velocity_noise_std_rad_per_s": 0.0,
+    "attitude_noise_std_rad": 0.0
+  },
+  "logging_config": {
+    "log_network_stats": false,
+    "log_actuator_stats": false,
+    "log_sensor_truth": false
+  },
+  "simulation": {
+    "gravity": [
+      0.0,
+      0.0,
+      -9.81
+    ],
+    "timestep": 0.001,
+    "state_publish_every_n_steps": 5,
+    "viewer_fps": 60.0,
+    "pacing_mode": "realtime",
+    "hold_until_first_command": true
+  },
+  "actuation": {
+    "command_mode": "omega",
+    "max_rotor_thrust": 20.0,
+    "yaw_moment_ratio": 0.015,
+    "thrust_coefficient": 3e-05,
+    "rotors": [
+      {
+        "name": "fr",
+        "position_body": [
+          0.08,
+          -0.1,
+          0.012
+        ],
+        "thrust_axis_body": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "yaw_moment_ratio": 0.015,
+        "spin_sign": -1
+      },
+      {
+        "name": "fl",
+        "position_body": [
+          0.08,
+          0.1,
+          0.012
+        ],
+        "thrust_axis_body": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "yaw_moment_ratio": 0.015,
+        "spin_sign": 1
+      },
+      {
+        "name": "br",
+        "position_body": [
+          -0.08,
+          -0.1,
+          0.012
+        ],
+        "thrust_axis_body": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "yaw_moment_ratio": 0.015,
+        "spin_sign": 1
+      },
+      {
+        "name": "bl",
+        "position_body": [
+          -0.08,
+          0.1,
+          0.012
+        ],
+        "thrust_axis_body": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "yaw_moment_ratio": 0.015,
+        "spin_sign": -1
+      }
+    ]
+  },
+  "drone": {
+    "name": "drone",
+    "initial_position": [
+      1.55,
+      0.0,
+      0.6
+    ],
+    "mass": 0.8,
+    "inertia": [
+      [
+        0.006,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.004,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.007
+      ]
+    ],
+    "arm": {
+      "x": 0.08,
+      "y": 0.1
+    },
+    "propeller": {
+      "z": 0.012,
+      "radius": 0.06,
+      "thickness": 0.005
+    },
+    "body_box": {
+      "size": [
+        0.1,
+        0.05,
+        0.1
+      ],
+      "euler": [
+        90.0,
+        0.0,
+        0.0
+      ],
+      "mass": 0.8,
+      "rgba": [
+        0.85,
+        0.15,
+        0.15,
+        1.0
+      ],
+      "contact": {
+        "contype": 1,
+        "conaffinity": 1,
+        "group": 0
+      }
+    },
+    "wheels": {
+      "offset_y": 0.2,
+      "radius": 0.15,
+      "thickness": 0.006,
+      "mass": 0.1,
+      "joint_damping": 0.001,
+      "solref": [
+        0.01,
+        1.0
+      ],
+      "friction": [
+        1.2,
+        0.005,
+        0.0001
+      ],
+      "rgba": [
+        0.15,
+        0.25,
+        0.85,
+        1.0
+      ],
+      "contact": {
+        "contype": 1,
+        "conaffinity": 1
+      }
+    }
+  },
+  "environment": {
+    "statistic_extent": 3.0,
+    "statistic_center": [
+      0.0,
+      0.0,
+      0.5
+    ],
+    "surface": {
+      "mode": "floor",
+      "type": "height_function",
+      "material": "floor_mat",
+      "rgba": [
+        0.3,
+        0.3,
+        0.35,
+        1.0
+      ],
+      "solref": [
+        0.002,
+        1.0
+      ],
+      "contact": {
+        "contype": 1,
+        "conaffinity": 1
+      },
+      "follow_surface_for_initial_position": false,
+      "initial_wheel_contact_clearance": 0.0001,
+      "plane": {
+        "size": [
+          3.0,
+          3.0,
+          0.1
+        ]
+      },
+      "height_function": {
+        "x_range": [
+          -3.0,
+          3.0
+        ],
+        "y_range": [
+          -3.0,
+          3.0
+        ],
+        "grid_resolution": [
+          121,
+          121
+        ],
+        "name": "gaussian",
+        "parameters": {
+          "z_offset": 0.0,
+          "slope_x": 0.0,
+          "slope_y": 0.0,
+          "curvature_x": 0.0,
+          "curvature_y": 0.0,
+          "amplitude": 0.5,
+          "frequency_x": 1.0,
+          "frequency_y": 1.0,
+          "phase_x": 0.0,
+          "phase_y": 0.0,
+          "center_x": 1.5,
+          "center_y": 0.0,
+          "sigma_x": 0.3,
+          "sigma_y": 0.7
+        }
+      }
+    },
+    "wall_position": [
+      2.0,
+      0.0,
+      1.0
+    ],
+    "wall_size": [
+      0.05,
+      1.2,
+      1.0
+    ],
+    "wall_euler": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "wall_rgba": [
+      0.8,
+      0.4,
+      0.4,
+      0.45
+    ],
+    "wall_solref": [
+      0.002,
+      1.0
+    ],
+    "wall_friction": [
+      1.2,
+      0.005,
+      0.0001
+    ],
+    "wall_contact": {
+      "contype": 1,
+      "conaffinity": 1
+    },
+    "wall_overlay": {
+      "enabled": true,
+      "surface_offset": 0.02,
+      "references": [
+        {
+          "start_yz": [
+            0.0,
+            0.6
+          ],
+          "target_yz": [
+            0.0,
+            1.6
+          ],
+          "speed": 0.0625,
+          "rgba": [
+            0.15,
+            0.75,
+            0.3,
+            0.95
+          ]
+        }
+      ]
+    },
+    "recording": {
+      "width": 480,
+      "height": 360,
+      "fps": 10,
+      "views": [
+        {
+          "azimuth": 335.0,
+          "elevation": -8.0
+        },
+        {
+          "azimuth": 270.0,
+          "elevation": -8.0,
+          "distance_scale": 0.8
+        }
+      ],
+      "show_contacts": true
+    }
+  },
+  "sensors": {
+    "body_name": "drone",
+    "items": {
+      "position": {
+        "name": "drone_position",
+        "type": "framepos"
+      },
+      "linear_velocity": {
+        "name": "drone_linear_velocity",
+        "type": "framelinvel"
+      },
+      "angular_velocity": {
+        "name": "drone_angular_velocity",
+        "type": "frameangvel"
+      },
+      "x_axis": {
+        "name": "drone_x_axis",
+        "type": "framexaxis"
+      },
+      "y_axis": {
+        "name": "drone_y_axis",
+        "type": "frameyaxis"
+      },
+      "z_axis": {
+        "name": "drone_z_axis",
+        "type": "framezaxis"
+      }
+    }
+  },
+  "controller": {
+    "desired_heading": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "position_gain": [
+      3.0,
+      3.0,
+      6.0
+    ],
+    "velocity_gain": [
+      2.2,
+      2.2,
+      4.0
+    ],
+    "attitude_gain": [
+      0.8,
+      0.8,
+      0.25
+    ],
+    "angular_velocity_gain": [
+      0.12,
+      0.12,
+      0.08
+    ],
+    "position_error_limit_m": 1.5,
+    "max_tilt_deg": 35.0
+  },
+  "formation": {
+    "num_uavs": 3,
+    "spawn_radius": 1.5,
+    "base_height": 1.5,
+    "centroid_target_xy": [
+      0.0,
+      0.0
+    ],
+    "formation_radius": 1.5,
+    "formation_gain": 1.2,
+    "centroid_gain": 0.8,
+    "duration_seconds": 20.0,
+    "idle_sleep_seconds": 0.001,
+    "status_display_interval": 2.0
+  }
+}

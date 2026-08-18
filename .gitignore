@@ -1,0 +1,13 @@
+logs/
+build/*.log
+build/generated_xml/
+build/generated_xml_validation/
+build/public_export*/
+wheeled_uav.generated.xml
+wheeled_uav.generated.instance_*.xml
+generated_surface.obj
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+MUJOCO_LOG.TXT

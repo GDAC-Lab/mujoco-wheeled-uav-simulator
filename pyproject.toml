@@ -1,0 +1,40 @@
+[project]
+name = "mujoco-wheeled-uav-simulator"
+version = "1.1.0"
+description = "MuJoCo simulator for a wheel-equipped quadrotor with UDP-connected MATLAB/Python controllers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mujoco>=3.6.0",
+    # Offscreen recording (wheeled_uav.runtime.visuals.FrameRecorder). imageio writes
+    # the container; imageio-ffmpeg bundles an ffmpeg binary so MP4 works without a
+    # system install. Both are only imported when a recording is actually requested.
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.optional-dependencies]
+# PX4 HITL bridge (wheeled_uav.px4_hitl): `uv sync --extra hil`
+# pyserial is required for pymavlink's serial (USB) transport — without it,
+# mavlink_connection("COM4") fails with "No module named 'serial'".
+hil = ["pymavlink>=2.4.41", "pyserial>=3.5"]
+
+[project.scripts]
+mujoco-wheeled-uav-simulator = "wheeled_uav.cli:main"
+# Short alias for interactive use: `uv run wuav simulate`
+wuav = "wheeled_uav.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+only-include = ["wheeled_uav"]
