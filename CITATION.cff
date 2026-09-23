@@ -4,7 +4,7 @@ title: "mujoco-wheeled-uav-simulator"
 type: software
 authors:
   - name: "GDAC-Lab"
-version: "1.1.1"
+version: "1.1.2"
 license: "MIT"
 repository-code: "https://github.com/GDAC-Lab/mujoco-wheeled-uav-simulator"
 keywords:
