@@ -84,7 +84,8 @@ def _rotor_specs_from_default_params():
 
     from wheeled_uav.model.builder import build_rotor_specs
 
-    params = json.loads(Path("vehicle_params.json").read_text(encoding="utf-8"))
+    params_path = Path(__file__).resolve().parents[1] / "vehicle_params.json"
+    params = json.loads(params_path.read_text(encoding="utf-8"))
     return {spec.suffix: spec for spec in build_rotor_specs(params)}
 
 
@@ -268,6 +269,7 @@ def test_missing_inertial_reference_warns_and_builds_the_body_only_model(tmp_pat
 
     # Only a warning: the model is byte-for-byte the one "body_only" builds.
     assert implicit_xml.read_text(encoding="utf-8") == explicit_xml.read_text(encoding="utf-8")
+
 
 def test_drone_mass_without_body_box_mass_builds_the_same_model(tmp_path):
     from wheeled_uav.model.builder import render_model_xml
