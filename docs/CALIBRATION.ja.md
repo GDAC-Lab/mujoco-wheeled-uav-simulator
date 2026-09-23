@@ -17,14 +17,15 @@
 }
 ```
 
-3. `load_vehicle_params()` が読み込み時に較正値を上書きし、1行のログを出す:
+3. 読み込み時に較正値で上書きされ、1行のログが出る。Python 側は `load_vehicle_params()`、MATLAB 側は `uavsim.Params.load` が同じ上書きをする:
 
 ```
 calibration: thrust_..._sim.json -> thrust_coefficient=1.72386e-06, yaw_moment_ratio=0.0200054
 ```
 
 - 相対パスは **vehicle_params.json のあるディレクトリ基準**で解決される。
-- 上書き結果と出所は `params["calibration_applied"]`（file / source / applied）に記録され、パラメータの根拠となった試験セッションを後から追跡できる。
+- 上書き結果と出所は `params["calibration_applied"]`（file / source / applied。MATLAB では `vehicle_params.raw.calibration_applied`）に記録され、パラメータの根拠となった試験セッションを後から追跡できる。
+- MATLAB の制御器も同じ kf で推力を Ω に換算するので、`command_mode: omega` で制御器の推力→Ω とシミュレータの Ω→推力が打ち消し合う。v1.1.1 までは MATLAB 側が `calibration_file` を無視しており、機体には指令推力の kf_較正 / kf_ファイル 倍しか出なかった（issue #1）。
 
 ## 上書きされる値（スキーマ `uav-propulsion-calibration/1`）
 
@@ -56,5 +57,5 @@ kf = c2 / Kv_rad²   （Kv_rad = motor_kv × 2π/60）
 
 ## 関連
 
-- テスト: `tests/test_calibration.py`
-- 実装: `wheeled_uav/calibration.py`（`load_vehicle_params()` から適用）
+- テスト: `tests/test_calibration.py`、`tests/test_matlab_params.py`（MATLAB 側が Python 側と同じ値になるか。GNU Octave の `octave-cli` があるときだけ実行）
+- 実装: `wheeled_uav/calibration.py`（`load_vehicle_params()` から適用）、`matlab/+uavsim/Params.m` の `apply_calibration_file`（`uavsim.Params.load` から適用）

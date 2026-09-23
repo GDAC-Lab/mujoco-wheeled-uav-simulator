@@ -16,9 +16,16 @@ next to the calibration data, then reference it from `vehicle_params.json`:
 }
 ```
 
-`load_vehicle_params()` overlays the measured values at load time and logs one line.
+Both loaders overlay the measured values at load time and log one line
+(`calibration: <file> -> ...`): `load_vehicle_params()` on the Python side and
+`uavsim.Params.load` on the MATLAB side. A MATLAB controller therefore converts
+thrust to rotor speed with the kf the simulator uses, and in `command_mode: omega`
+the two conversions cancel. Up to v1.1.1 the MATLAB loader ignored
+`calibration_file`, so the vehicle got only kf_calibrated / kf_file of the
+commanded thrust (issue #1).
 Relative paths resolve against the directory containing vehicle_params.json.
-Provenance is kept in `params["calibration_applied"]`.
+Provenance is kept in `params["calibration_applied"]`
+(MATLAB: `vehicle_params.raw.calibration_applied`).
 
 ## Schema `uav-propulsion-calibration/1`
 

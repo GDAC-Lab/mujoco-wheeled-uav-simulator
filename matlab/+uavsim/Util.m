@@ -76,6 +76,13 @@ classdef Util
             path_value = char(path_value);
         end
 
+        function tf = is_absolute_path(path_text)
+            % POSIX (/...), UNC (\\server\...) or drive-letter (C:\ or C:/) path.
+            path_text = char(path_text);
+            tf = startsWith(path_text, '/') || startsWith(path_text, '\\') ...
+                || ~isempty(regexp(path_text, '^[A-Za-z]:[\\/]', 'once'));
+        end
+
         function time_ns = wall_time_now_ns()
             time_ns = floor(posixtime(datetime('now', 'TimeZone', 'UTC')) * 1.0e9);
         end

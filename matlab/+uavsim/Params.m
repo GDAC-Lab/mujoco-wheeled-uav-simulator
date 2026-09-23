@@ -13,6 +13,11 @@ classdef Params
 
             params_path = char(parser.Results.params_path);
             raw_params = jsondecode(fileread(params_path));
+            % Overlay actuation.calibration_file before anything reads the
+            % actuation block, as load_vehicle_params() does on the Python side.
+            % In command_mode 'omega' the controller's thrust -> omega and the
+            % simulator's omega -> thrust only cancel when both use the same kf.
+            raw_params = uavsim.Params.apply_calibration_file(raw_params, params_path);
 
             vehicle_params = struct( ...
                 'mass', uavsim.Params.parse_total_mass(raw_params), ...
@@ -64,6 +69,136 @@ classdef Params
                 otherwise
                     error('uavsim:Params:badInertialReference', ...
                         'drone.inertial_reference must be "body_only" or "total_vehicle" (got "%s").', reference);
+            end
+        end
+
+        function raw_params = apply_calibration_file(raw_params, params_path)
+            % MATLAB port of apply_calibration_file (wheeled_uav/calibration.py):
+            % overlays the sim_params of the file named by
+            % actuation.calibration_file (schema uav-propulsion-calibration/1)
+            % and records raw_params.calibration_applied (file, source, applied).
+            % A relative path resolves against the directory of the params file,
+            % and null entries are skipped, so a calibration overrides only what
+            % it measured. See docs/CALIBRATION.md.
+            if ~isfield(raw_params, 'actuation') || ~isstruct(raw_params.actuation) ...
+                    || ~isfield(raw_params.actuation, 'calibration_file')
+                return;
+            end
+            raw_path = raw_params.actuation.calibration_file;
+            if isempty(raw_path)
+                return;   % null or "": no calibration referenced
+            end
+            calibration_path = char(raw_path);
+            if ~uavsim.Util.is_absolute_path(calibration_path)
+                calibration_path = fullfile(fileparts(char(params_path)), calibration_path);
+            end
+            if ~isfile(calibration_path)
+                error('uavsim:Params:calibrationNotFound', ...
+                    'actuation.calibration_file not found: %s', calibration_path);
+            end
+
+            document = jsondecode(fileread(calibration_path));
+            schema = '';
+            if isstruct(document) && isfield(document, 'schema') && ischar(document.schema)
+                schema = document.schema;
+            end
+            if ~strcmp(schema, 'uav-propulsion-calibration/1')
+                error('uavsim:Params:unsupportedCalibrationSchema', ...
+                    'Unsupported calibration schema ''%s'' in %s; expected ''uav-propulsion-calibration/1''', ...
+                    schema, calibration_path);
+            end
+            if ~isfield(document, 'sim_params') || ~isstruct(document.sim_params)
+                error('uavsim:Params:invalidCalibration', ...
+                    'Calibration file %s has no ''sim_params'' object', calibration_path);
+            end
+            sim_params = document.sim_params;
+            applied = struct();
+
+            value = uavsim.Params.get_calibration_value(sim_params, 'thrust_coefficient');
+            if ~isempty(value)
+                if value <= 0.0
+                    error('uavsim:Params:invalidCalibration', 'calibration sim_params.thrust_coefficient must be positive');
+                end
+                raw_params.actuation.thrust_coefficient = value;
+                applied.thrust_coefficient = value;
+            end
+
+            value = uavsim.Params.get_calibration_value(sim_params, 'yaw_moment_ratio');
+            if ~isempty(value)
+                if value <= 0.0
+                    error('uavsim:Params:invalidCalibration', 'calibration sim_params.yaw_moment_ratio must be positive');
+                end
+                raw_params.actuation.yaw_moment_ratio = value;
+                % The bench test measures one km/kf for the whole propulsion set,
+                % and a rotor's own yaw_moment_ratio wins over the global one, so
+                % align those too: a stale per-rotor value would silently win.
+                if isfield(raw_params.actuation, 'rotors')
+                    raw_params.actuation.rotors = uavsim.Params.set_rotor_yaw_moment_ratio(raw_params.actuation.rotors, value);
+                end
+                applied.yaw_moment_ratio = value;
+            end
+
+            value = uavsim.Params.get_calibration_value(sim_params, 'motor_tau_ms');
+            if ~isempty(value)
+                if value < 0.0
+                    error('uavsim:Params:invalidCalibration', 'calibration sim_params.motor_tau_ms must be >= 0');
+                end
+                if ~isfield(raw_params, 'actuator_dynamics')
+                    raw_params.actuator_dynamics = struct();
+                end
+                if isstruct(raw_params.actuator_dynamics)
+                    raw_params.actuator_dynamics.motor_tau_ms = value;
+                    applied.motor_tau_ms = value;
+                end
+            end
+
+            source = struct();
+            if isfield(document, 'source') && isstruct(document.source) && isscalar(document.source)
+                source = document.source;
+            end
+            raw_params.calibration_applied = struct('file', calibration_path, 'source', source, 'applied', applied);
+
+            [~, file_name, file_extension] = fileparts(calibration_path);
+            applied_names = fieldnames(applied);
+            if isempty(applied_names)
+                fprintf('calibration: %s%s has no applicable sim_params; nothing overridden\n', file_name, file_extension);
+            else
+                applied_texts = cell(1, numel(applied_names));
+                for name_index = 1:numel(applied_names)
+                    applied_texts{name_index} = sprintf('%s=%g', applied_names{name_index}, applied.(applied_names{name_index}));
+                end
+                fprintf('calibration: %s%s -> %s\n', file_name, file_extension, strjoin(applied_texts, ', '));
+            end
+        end
+
+        function value = get_calibration_value(sim_params, field_name)
+            % [] when the entry is absent or null (jsondecode gives []).
+            value = [];
+            if ~isfield(sim_params, field_name) || isempty(sim_params.(field_name))
+                return;
+            end
+            candidate = sim_params.(field_name);
+            if ~isnumeric(candidate) || ~isscalar(candidate)
+                error('uavsim:Params:invalidCalibration', ...
+                    'calibration sim_params.%s must be a number or null', field_name);
+            end
+            value = double(candidate);
+        end
+
+        function rotors = set_rotor_yaw_moment_ratio(rotors, value)
+            % Only rotors that carry their own yaw_moment_ratio change; the others
+            % already inherit actuation.yaw_moment_ratio. jsondecode gives a struct
+            % array when every rotor has the same fields and a cell array otherwise.
+            if isstruct(rotors)
+                if isfield(rotors, 'yaw_moment_ratio')
+                    [rotors.yaw_moment_ratio] = deal(value);
+                end
+            elseif iscell(rotors)
+                for rotor_index = 1:numel(rotors)
+                    if isstruct(rotors{rotor_index}) && isfield(rotors{rotor_index}, 'yaw_moment_ratio')
+                        rotors{rotor_index}.yaw_moment_ratio = value;
+                    end
+                end
             end
         end
 
