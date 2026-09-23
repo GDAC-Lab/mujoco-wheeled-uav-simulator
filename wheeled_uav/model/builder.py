@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from ..config import get_inertial_reference
+from ..config import get_configured_drone_mass, get_inertial_reference
 from ..paths import DEFAULT_PATH_RESOLVER, PathResolver
 from ..types import InitialPoseSpec, RotorSpec, SensorNames, SurfaceEvaluator, UAVModelSpec
 from .poses import build_initial_poses, build_surface_model_spec
@@ -213,7 +213,7 @@ def _get_drone_mass(drone: dict[str, Any]) -> float:
     # Mass assigned to the central body <inertial>. With inertial_reference
     # "total_vehicle", drone.mass is the whole-vehicle mass and the wheel masses
     # are subtracted here so the assembled MuJoCo model matches drone.mass exactly.
-    total_or_body_mass = float(drone.get("mass", drone["body_box"]["mass"]))
+    total_or_body_mass = get_configured_drone_mass(drone)
     if get_inertial_reference(drone) == "body_only":
         return total_or_body_mass
 
@@ -236,7 +236,7 @@ def _get_raw_diaginertia(drone: dict[str, Any]) -> tuple[float, float, float]:
             return tuple(float(value) for value in inertia_matrix)
         raise ValueError("drone.inertia must be a 3-element vector or 3x3 matrix")
 
-    mass = float(drone.get("mass", drone["body_box"]["mass"]))
+    mass = get_configured_drone_mass(drone)
     box_size = np.asarray(drone["body_box"]["size"], dtype=float)
     ixx = mass * (box_size[1] ** 2 + box_size[2] ** 2) / 3.0
     iyy = mass * (box_size[0] ** 2 + box_size[2] ** 2) / 3.0

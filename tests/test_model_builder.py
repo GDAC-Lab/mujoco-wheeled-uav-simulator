@@ -268,3 +268,16 @@ def test_missing_inertial_reference_warns_and_builds_the_body_only_model(tmp_pat
 
     # Only a warning: the model is byte-for-byte the one "body_only" builds.
     assert implicit_xml.read_text(encoding="utf-8") == explicit_xml.read_text(encoding="utf-8")
+
+def test_drone_mass_without_body_box_mass_builds_the_same_model(tmp_path):
+    from wheeled_uav.model.builder import render_model_xml
+
+    with_fallback = load_vehicle_params()
+    without_fallback = load_vehicle_params()
+    del without_fallback["drone"]["body_box"]["mass"]
+
+    reference_xml, _, _ = render_model_xml(with_fallback, output_path=tmp_path / "reference.xml")
+    xml_path, _, _ = render_model_xml(without_fallback, output_path=tmp_path / "no_body_box_mass.xml")
+
+    # drone.mass is set, so body_box.mass was never read.
+    assert xml_path.read_text(encoding="utf-8") == reference_xml.read_text(encoding="utf-8")

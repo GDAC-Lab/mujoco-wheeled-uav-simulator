@@ -24,6 +24,7 @@ __all__ = [
     "build_aerodynamics_config",
     "build_fidelity_config",
     "clear_vehicle_params_cache",
+    "get_configured_drone_mass",
     "get_inertial_reference",
     "load_vehicle_params",
     "parse_total_mass",
@@ -36,6 +37,14 @@ class InertialReferenceWarning(UserWarning):
     """drone.inertial_reference is missing, so the "body_only" default applies."""
 
 
+def get_configured_drone_mass(drone_params: dict[str, Any]) -> float:
+    # drone.mass; drone.body_box.mass is the legacy location, read only when
+    # drone.mass is absent, so a config that sets drone.mass needs no body_box.mass.
+    if "mass" in drone_params:
+        return float(drone_params["mass"])
+    return float(drone_params["body_box"]["mass"])
+
+
 def get_inertial_reference(drone_params: dict[str, Any]) -> str:
     # "body_only": drone.mass / drone.inertia describe the central body and the two
     # wheels are added on top. "total_vehicle": they describe the whole vehicle and
@@ -45,7 +54,7 @@ def get_inertial_reference(drone_params: dict[str, Any]) -> str:
     # silently counts the wheel mass twice.
     raw_value = drone_params.get("inertial_reference")
     if raw_value is None:
-        body_mass = float(drone_params.get("mass", drone_params["body_box"]["mass"]))
+        body_mass = get_configured_drone_mass(drone_params)
         wheel_mass = float(drone_params["wheels"]["mass"])
         # stacklevel=1 attributes the warning to this line, so Python's default
         # filter prints it once per process instead of once per call site
@@ -72,7 +81,7 @@ def parse_total_mass(params: dict[str, Any]) -> float:
     # total = body mass + 2 * wheel mass.
     drone_params = params["drone"]
     inertial_reference = get_inertial_reference(drone_params)
-    body_or_total_mass = float(drone_params.get("mass", drone_params["body_box"]["mass"]))
+    body_or_total_mass = get_configured_drone_mass(drone_params)
     if inertial_reference == "total_vehicle":
         return body_or_total_mass
     return body_or_total_mass + 2.0 * float(drone_params["wheels"]["mass"])

@@ -150,6 +150,22 @@ def test_explicit_inertial_reference_does_not_warn(reference, expected_total_mas
         assert parse_total_mass(params) == pytest.approx(expected_total_mass)
 
 
+def test_drone_mass_needs_no_body_box_mass():
+    # body_box.mass is only the fallback for configs without drone.mass.
+    params = load_vehicle_params()
+    del params["drone"]["body_box"]["mass"]
+
+    assert parse_total_mass(params) == pytest.approx(0.8 + 2.0 * 0.1)
+
+
+def test_body_box_mass_is_read_when_drone_mass_is_absent():
+    params = load_vehicle_params()
+    del params["drone"]["mass"]
+    params["drone"]["body_box"]["mass"] = 0.7
+
+    assert parse_total_mass(params) == pytest.approx(0.7 + 2.0 * 0.1)
+
+
 def test_unknown_inertial_reference_is_rejected():
     params = load_vehicle_params()
     params["drone"]["inertial_reference"] = "total"
