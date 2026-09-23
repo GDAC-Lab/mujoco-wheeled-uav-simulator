@@ -44,6 +44,7 @@ class PythonHoverControllerTests(unittest.TestCase):
             "drone": {
                 "arm": {"x": 0.08, "y": 0.1},
                 "body_box": {"mass": 0.9},
+                "inertial_reference": "body_only",
                 "wheels": {"mass": 0.1},
             },
             "controller": {

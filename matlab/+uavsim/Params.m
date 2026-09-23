@@ -35,22 +35,35 @@ classdef Params
 
         function total_mass = parse_total_mass(raw_params)
             % drone.inertial_reference "total_vehicle": drone.mass already includes the wheels.
-            % Legacy "body_only" (default): total = body mass + 2 * wheel mass.
+            % "body_only": total = body mass + 2 * wheel mass. A missing key keeps the
+            % "body_only" default but warns, as the Python simulator does: reading a
+            % whole-vehicle measurement as "body_only" counts the wheel mass twice.
             drone = raw_params.drone;
-            if isfield(drone, 'inertial_reference')
-                reference = lower(strtrim(char(drone.inertial_reference)));
-            else
-                reference = 'body_only';
-            end
             if isfield(drone, 'mass')
                 body_mass = double(drone.mass);
             else
                 body_mass = double(drone.body_box.mass);
             end
-            if strcmp(reference, 'total_vehicle')
-                total_mass = body_mass;
+            if isfield(drone, 'inertial_reference')
+                reference = lower(strtrim(char(drone.inertial_reference)));
             else
-                total_mass = body_mass + 2.0 * double(drone.wheels.mass);
+                reference = 'body_only';
+                wheel_mass = double(drone.wheels.mass);
+                warning('uavsim:Params:inertialReferenceUnset', ...
+                    ['drone.inertial_reference is not set; assuming "body_only": the model gets ' ...
+                     'drone.mass %g kg plus two wheels of %g kg = %g kg in total. If drone.mass ' ...
+                     'and drone.inertia describe the whole vehicle, set "total_vehicle"; ' ...
+                     'otherwise set "body_only" explicitly to silence this warning.'], ...
+                    body_mass, wheel_mass, body_mass + 2.0 * wheel_mass);
+            end
+            switch reference
+                case 'total_vehicle'
+                    total_mass = body_mass;
+                case 'body_only'
+                    total_mass = body_mass + 2.0 * double(drone.wheels.mass);
+                otherwise
+                    error('uavsim:Params:badInertialReference', ...
+                        'drone.inertial_reference must be "body_only" or "total_vehicle" (got "%s").', reference);
             end
         end
 

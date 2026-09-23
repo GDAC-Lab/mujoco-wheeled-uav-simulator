@@ -113,6 +113,7 @@
       0.15
     ],
     "mass": 0.8,
+    "inertial_reference": "body_only",
     "inertia": [
       [
         0.006,

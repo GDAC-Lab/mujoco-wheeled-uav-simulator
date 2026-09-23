@@ -249,3 +249,22 @@ def test_legacy_template_requires_mesh_when_it_hardcodes_the_asset(tmp_path):
 
     with pytest.raises(ValueError, match="__MESH_ASSET_BLOCK__"):
         render_model_xml(params, output_path=tmp_path / "model.xml", template_path=legacy_template)
+
+
+def test_missing_inertial_reference_warns_and_builds_the_body_only_model(tmp_path):
+    import pytest
+
+    from wheeled_uav.config import InertialReferenceWarning
+    from wheeled_uav.model.builder import render_model_xml
+
+    explicit = load_vehicle_params()
+    assert explicit["drone"]["inertial_reference"] == "body_only"
+    implicit = load_vehicle_params()
+    del implicit["drone"]["inertial_reference"]
+
+    explicit_xml, _, _ = render_model_xml(explicit, output_path=tmp_path / "explicit.xml")
+    with pytest.warns(InertialReferenceWarning):
+        implicit_xml, _, _ = render_model_xml(implicit, output_path=tmp_path / "implicit.xml")
+
+    # Only a warning: the model is byte-for-byte the one "body_only" builds.
+    assert implicit_xml.read_text(encoding="utf-8") == explicit_xml.read_text(encoding="utf-8")

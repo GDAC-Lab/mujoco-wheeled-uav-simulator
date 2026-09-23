@@ -285,7 +285,7 @@ MATLAB controller のローカル UDP ポートが既に使用中だと表示さ
 - ロータ推力換算係数 `thrust_coefficient`
 - 機体初期位置
 - スポーン姿勢ポリシー `drone.initial_spawn`: `mode` は `"surface"`（既定；地形に接地静定）、`"wall_contact"`（床＋壁スタート。`wall_clearance_m` 離隔（既定 5 mm）と任意の `b2_body`/`b3_body` 初期姿勢付き）、`"explicit"`（`positions_xy` で複数機を任意座標に配置；`center_x` で壁法線方向オフセットを上書き）
-- 機体ボディと車輪の主要寸法・質量；`drone.inertial_reference` は `"body_only"`（既定；`drone.mass`/`drone.inertia` は中央ボディのみで車輪分は加算）または `"total_vehicle"`（全機体を表し、MuJoCo ボディ構築時に車輪の解析寄与を減算）
+- 機体ボディと車輪の主要寸法・質量；`drone.inertial_reference` は `"body_only"`（`drone.mass`/`drone.inertia` は中央ボディのみで車輪分は加算）または `"total_vehicle"`（全機体を表し、MuJoCo ボディ構築時に車輪の解析寄与を減算）。必ず指定してください：キーが無いと `"body_only"` とみなし、Python 側（`InertialReferenceWarning`）と `uavsim.Params`（`uavsim:Params:inertialReferenceUnset`）が警告します（機体全体の実測値を `"body_only"` で読むと車輪の質量を二重に数えるため）
 - 床、壁、機体、車輪の接触設定（`solref`、任意で `solimp` と `condim`）。キーの綴りは要素ごとに異なります：車輪はネスト（`drone.wheels.solimp`/`condim`）、surface もネスト（`environment.surface.solimp`/`condim`）、壁はフラット接頭辞（`environment.wall_solimp`, `environment.wall_condim`）
 - `environment.surface` による平面または関数ベース曲面の指定
 - オフスクリーン録画 `environment.recording`（`width`, `height`, `fps`；`simulate --record PATH` が使用）。任意の `views` で複数カメラアングルを横並び合成（自動フレーミングに対する `{azimuth, elevation, distance_scale}` 上書きのリスト）、`show_contacts: true` で録画に接触点・接触力ベクトルを描画（対話ビューアの表示設定には影響しない）

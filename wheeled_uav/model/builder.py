@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import get_inertial_reference
 from ..paths import DEFAULT_PATH_RESOLVER, PathResolver
 from ..types import InitialPoseSpec, RotorSpec, SensorNames, SurfaceEvaluator, UAVModelSpec
 from .poses import build_initial_poses, build_surface_model_spec
@@ -190,13 +191,6 @@ def _build_wheel_body_block(drone: dict[str, Any], prefix: str, side_name: str, 
     ]
 
 
-def _get_inertial_reference(drone: dict[str, Any]) -> str:
-    inertial_reference = str(drone.get("inertial_reference", "body_only")).strip().lower()
-    if inertial_reference not in {"body_only", "total_vehicle"}:
-        raise ValueError('drone.inertial_reference must be "body_only" or "total_vehicle"')
-    return inertial_reference
-
-
 def _wheel_pair_inertia_contribution(drone: dict[str, Any]) -> tuple[float, tuple[float, float, float]]:
     # Both wheels modeled as solid cylinders (axis along body y) offset +/-offset_y from the COM.
     wheels = drone["wheels"]
@@ -220,7 +214,7 @@ def _get_drone_mass(drone: dict[str, Any]) -> float:
     # "total_vehicle", drone.mass is the whole-vehicle mass and the wheel masses
     # are subtracted here so the assembled MuJoCo model matches drone.mass exactly.
     total_or_body_mass = float(drone.get("mass", drone["body_box"]["mass"]))
-    if _get_inertial_reference(drone) == "body_only":
+    if get_inertial_reference(drone) == "body_only":
         return total_or_body_mass
 
     wheel_pair_mass, _ = _wheel_pair_inertia_contribution(drone)
@@ -255,7 +249,7 @@ def _get_drone_diaginertia(drone: dict[str, Any]) -> tuple[float, float, float]:
     # inertia about the COM; the analytically-known wheel cylinder contributions are
     # subtracted so the assembled model reproduces drone.inertia.
     diaginertia = _get_raw_diaginertia(drone)
-    if _get_inertial_reference(drone) == "body_only":
+    if get_inertial_reference(drone) == "body_only":
         return diaginertia
 
     _, wheel_pair_inertia = _wheel_pair_inertia_contribution(drone)

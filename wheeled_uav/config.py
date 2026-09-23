@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,19 +20,58 @@ from .types import (
 )
 
 __all__ = [
+    "InertialReferenceWarning",
     "build_aerodynamics_config",
     "build_fidelity_config",
     "clear_vehicle_params_cache",
+    "get_inertial_reference",
     "load_vehicle_params",
     "parse_total_mass",
 ]
 
+INERTIAL_REFERENCES = ("body_only", "total_vehicle")
+
+
+class InertialReferenceWarning(UserWarning):
+    """drone.inertial_reference is missing, so the "body_only" default applies."""
+
+
+def get_inertial_reference(drone_params: dict[str, Any]) -> str:
+    # "body_only": drone.mass / drone.inertia describe the central body and the two
+    # wheels are added on top. "total_vehicle": they describe the whole vehicle and
+    # the analytic wheel contributions are subtracted when the MuJoCo body is built.
+    # A missing key keeps the "body_only" default but warns, because reading a
+    # whole-vehicle measurement (a scale weight, a CAD assembly) as "body_only"
+    # silently counts the wheel mass twice.
+    raw_value = drone_params.get("inertial_reference")
+    if raw_value is None:
+        body_mass = float(drone_params.get("mass", drone_params["body_box"]["mass"]))
+        wheel_mass = float(drone_params["wheels"]["mass"])
+        # stacklevel=1 attributes the warning to this line, so Python's default
+        # filter prints it once per process instead of once per call site
+        # (the builder asks twice per UAV, the hover controller once more).
+        warnings.warn(
+            'drone.inertial_reference is not set; assuming "body_only": the model gets '
+            f"drone.mass {body_mass:g} kg plus two wheels of {wheel_mass:g} kg = "
+            f"{body_mass + 2.0 * wheel_mass:g} kg in total. If drone.mass and drone.inertia "
+            'describe the whole vehicle, set "total_vehicle"; otherwise set "body_only" '
+            "explicitly to silence this warning.",
+            InertialReferenceWarning,
+            stacklevel=1,
+        )
+        return "body_only"
+    inertial_reference = str(raw_value).strip().lower()
+    if inertial_reference not in INERTIAL_REFERENCES:
+        raise ValueError('drone.inertial_reference must be "body_only" or "total_vehicle"')
+    return inertial_reference
+
 
 def parse_total_mass(params: dict[str, Any]) -> float:
     # drone.inertial_reference "total_vehicle": drone.mass already includes the wheels.
-    # Legacy "body_only" (default): total = body mass + 2 * wheel mass.
+    # "body_only" (the default, with a warning, when the key is missing):
+    # total = body mass + 2 * wheel mass.
     drone_params = params["drone"]
-    inertial_reference = str(drone_params.get("inertial_reference", "body_only")).strip().lower()
+    inertial_reference = get_inertial_reference(drone_params)
     body_or_total_mass = float(drone_params.get("mass", drone_params["body_box"]["mass"]))
     if inertial_reference == "total_vehicle":
         return body_or_total_mass

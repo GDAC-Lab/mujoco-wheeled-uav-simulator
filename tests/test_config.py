@@ -3,10 +3,26 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
-from wheeled_uav.config import build_fidelity_config, clear_vehicle_params_cache, load_vehicle_params
+import pytest
+
+from wheeled_uav.config import (
+    InertialReferenceWarning,
+    build_fidelity_config,
+    clear_vehicle_params_cache,
+    load_vehicle_params,
+    parse_total_mass,
+)
 from wheeled_uav.paths import PathResolver
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SHIPPED_VEHICLE_PARAMS = (
+    REPOSITORY_ROOT / "vehicle_params.json",
+    REPOSITORY_ROOT / "vehicle_params.tilted_rotor_example.json",
+    REPOSITORY_ROOT / "configs" / "vehicle_params.wall_demo.json",
+)
 
 
 class LoadVehicleParamsTests(unittest.TestCase):
@@ -109,6 +125,44 @@ class LoadVehicleParamsTests(unittest.TestCase):
         self.assertEqual(fidelity.actuator_dynamics.motor_tau_ms, 0.0)
         self.assertEqual(fidelity.sensor_fidelity.position_noise_std_m, 0.0)
         self.assertFalse(fidelity.logging.log_network_stats)
+
+
+def test_missing_inertial_reference_warns_and_keeps_body_only():
+    params = load_vehicle_params()
+    del params["drone"]["inertial_reference"]
+
+    with pytest.warns(InertialReferenceWarning, match=r"0\.8 kg plus two wheels of 0\.1 kg = 1 kg"):
+        total_mass = parse_total_mass(params)
+
+    assert total_mass == pytest.approx(0.8 + 2.0 * 0.1)
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected_total_mass"),
+    [("body_only", 1.0), ("total_vehicle", 0.8), (" Total_Vehicle ", 0.8)],
+)
+def test_explicit_inertial_reference_does_not_warn(reference, expected_total_mass):
+    params = load_vehicle_params()
+    params["drone"]["inertial_reference"] = reference
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", InertialReferenceWarning)
+        assert parse_total_mass(params) == pytest.approx(expected_total_mass)
+
+
+def test_unknown_inertial_reference_is_rejected():
+    params = load_vehicle_params()
+    params["drone"]["inertial_reference"] = "total"
+
+    with pytest.raises(ValueError, match="inertial_reference"):
+        parse_total_mass(params)
+
+
+@pytest.mark.parametrize("params_path", SHIPPED_VEHICLE_PARAMS, ids=lambda path: path.name)
+def test_shipped_vehicle_params_set_inertial_reference(params_path):
+    # The bundled configs must not trip the warning; they keep the historical meaning.
+    drone = json.loads(params_path.read_text(encoding="utf-8"))["drone"]
+    assert drone["inertial_reference"] == "body_only"
 
 
 if __name__ == "__main__":
