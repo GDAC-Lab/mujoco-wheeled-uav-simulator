@@ -283,3 +283,82 @@ def test_drone_mass_without_body_box_mass_builds_the_same_model(tmp_path):
 
     # drone.mass is set, so body_box.mass was never read.
     assert xml_path.read_text(encoding="utf-8") == reference_xml.read_text(encoding="utf-8")
+
+
+def _assembled_mass_com_inertia(params, tmp_path, name):
+    import mujoco
+    import numpy as np
+
+    from wheeled_uav.model.builder import render_model_xml
+
+    xml_path, _, _ = render_model_xml(params, output_path=tmp_path / f"{name}.xml")
+    model = mujoco.MjModel.from_xml_path(str(xml_path))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    root = model.body("drone").id
+    mass = float(model.body_subtreemass[root])
+    com = np.array(data.subtree_com[root]) - np.array(data.xpos[root])
+    rot = np.array(data.xmat[root]).reshape(3, 3)
+    inertia = np.zeros((3, 3))
+    for body in range(root, model.nbody):
+        if body != root and model.body_rootid[body] != root:
+            continue
+        r = np.array(data.xipos[body]) - np.array(data.subtree_com[root])
+        rb = np.array(data.ximat[body]).reshape(3, 3)
+        inertia += rb @ np.diag(model.body_inertia[body]) @ rb.T + model.body_mass[body] * (r @ r * np.eye(3) - np.outer(r, r))
+    return mass, rot.T @ com, rot.T @ inertia @ rot
+
+
+def test_wheel_offset_z_keeps_the_whole_vehicle_mass_com_and_inertia(tmp_path):
+    import copy
+
+    import numpy as np
+
+    params = load_vehicle_params()
+    drone = params["drone"]
+    drone["inertial_reference"] = "total_vehicle"
+    drone["inertia"] = [[0.0117, 0.0, 0.0], [0.0, 0.0052, 0.0], [0.0, 0.0, 0.0133]]
+    drone["mass"] = 1.093
+    drone["wheels"]["mass"] = 0.114
+    raised = copy.deepcopy(params)
+    raised["drone"]["wheels"]["offset_z"] = 0.0099
+
+    for case in (params, raised):
+        mass, com, inertia = _assembled_mass_com_inertia(case, tmp_path, f"z{case['drone']['wheels'].get('offset_z', 0.0)}")
+        # The assembled model reproduces drone.mass / drone.inertia about the COM, and the COM stays at the body origin.
+        assert abs(mass - 1.093) < 1e-9
+        assert np.allclose(com, 0.0, atol=1e-9)
+        assert np.allclose(np.diag(inertia), [0.0117, 0.0052, 0.0133], atol=1e-9)
+
+
+def test_wheel_offset_z_default_builds_the_same_model(tmp_path):
+    from wheeled_uav.model.builder import render_model_xml
+
+    reference = load_vehicle_params()
+    explicit = load_vehicle_params()
+    explicit["drone"]["wheels"]["offset_z"] = 0.0
+    a, _, _ = render_model_xml(reference, output_path=tmp_path / "a.xml")
+    b, _, _ = render_model_xml(explicit, output_path=tmp_path / "b.xml")
+    assert a.read_text(encoding="utf-8") == b.read_text(encoding="utf-8")
+
+
+def test_wall_contact_spawn_places_the_axle_not_the_origin():
+    import copy
+
+    import numpy as np
+
+    from wheeled_uav.model.poses import _resolve_wall_contact_center_x, get_wall_contact_initial_pose
+
+    params = load_vehicle_params()
+    drone = copy.deepcopy(params["drone"])
+    drone["initial_spawn"] = {"mode": "wall_contact", "b2_body": [0.0, 1.0, 0.0], "b3_body": [0.5, 0.0, 0.866]}
+    environment = {"wall_position": [2.0, 0.0, 3.0], "wall_size": [0.05, 20.0, 3.0]}
+    base = get_wall_contact_initial_pose(drone, environment)
+    drone["wheels"]["offset_z"] = 0.0099
+    raised = get_wall_contact_initial_pose(drone, environment)
+    w, x, y, z = raised.quaternion
+    b3 = np.array([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)])
+    axle = np.asarray(raised.position) + 0.0099 * b3
+    # The axle keeps the wall clearance and height of the default model; only the origin moves.
+    assert np.allclose(axle, base.position, atol=1e-12)
+    assert abs(axle[0] - _resolve_wall_contact_center_x(environment, drone)) < 1e-12

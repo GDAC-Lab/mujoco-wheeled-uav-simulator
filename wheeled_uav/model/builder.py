@@ -184,29 +184,49 @@ def _build_wheel_body_block(drone: dict[str, Any], prefix: str, side_name: str, 
     if wheels.get("condim") is not None:
         optional_attributes += f' condim="{format_scalar(int(wheels["condim"]))}"'
     return [
-        f'      <body name="{wheel_body_name}" pos="{format_vector([0.0, wheel_direction * wheel_offset_y, 0.0])}">',
+        f'      <body name="{wheel_body_name}" pos="{format_vector([0.0, wheel_direction * wheel_offset_y, wheel_offset_z(drone)])}">',
         f'        <joint name="{wheel_joint_name}" type="hinge" axis="0 1 0" damping="{format_scalar(wheels["joint_damping"])}"/>',
         f'        <geom name="{wheel_geom_name}" type="cylinder" size="{format_vector([wheels["radius"], wheels["thickness"]])}" euler="90 0 0" mass="{format_scalar(wheels["mass"])}" rgba="{format_vector(wheels["rgba"])}" solref="{format_vector(wheels["solref"])}"{optional_attributes} friction="{wheel_friction}" contype="{format_scalar(wheels["contact"]["contype"])}" conaffinity="{format_scalar(wheels["contact"]["conaffinity"])}"/>',
         "      </body>",
     ]
 
 
+def wheel_offset_z(drone: dict[str, Any]) -> float:
+    # Height of the wheel axle along body z, measured from the body frame origin. With
+    # inertial_reference "total_vehicle" the origin is the whole-vehicle COM, so a positive
+    # value puts the axle above the COM (e.g. a battery hung below the axle). Default 0:
+    # the axle passes through the origin, as in every model before this key existed.
+    return float(drone["wheels"].get("offset_z", 0.0))
+
+
 def _wheel_pair_inertia_contribution(drone: dict[str, Any]) -> tuple[float, tuple[float, float, float]]:
-    # Both wheels modeled as solid cylinders (axis along body y) offset +/-offset_y from the COM.
+    # Both wheels modeled as solid cylinders (axis along body y) at (0, +/-offset_y, offset_z)
+    # from the body frame origin; the inertia returned is about that origin.
     wheels = drone["wheels"]
     wheel_mass = float(wheels["mass"])
     radius = float(wheels["radius"])
     full_height = 2.0 * float(wheels["thickness"])
     offset_y = float(wheels["offset_y"])
+    offset_z = wheel_offset_z(drone)
 
     inertia_about_axis = 0.5 * wheel_mass * radius * radius
     inertia_perpendicular = wheel_mass * (3.0 * radius * radius + full_height * full_height) / 12.0
-    parallel_axis_term = wheel_mass * offset_y * offset_y
 
-    pair_ixx = 2.0 * (inertia_perpendicular + parallel_axis_term)
-    pair_iyy = 2.0 * inertia_about_axis
-    pair_izz = pair_ixx
+    pair_ixx = 2.0 * (inertia_perpendicular + wheel_mass * (offset_y * offset_y + offset_z * offset_z))
+    pair_iyy = 2.0 * (inertia_about_axis + wheel_mass * offset_z * offset_z)
+    pair_izz = 2.0 * (inertia_perpendicular + wheel_mass * offset_y * offset_y)
     return 2.0 * wheel_mass, (pair_ixx, pair_iyy, pair_izz)
+
+
+def _get_body_com_z(drone: dict[str, Any]) -> float:
+    # With inertial_reference "total_vehicle" the whole-vehicle COM stays at the body frame
+    # origin, so when the wheels sit at offset_z the central body's own COM moves the other
+    # way: M_body * z_body + 2 m_wheel * offset_z = 0.
+    offset_z = wheel_offset_z(drone)
+    if offset_z == 0.0 or get_inertial_reference(drone) == "body_only":
+        return 0.0
+    wheel_pair_mass, _ = _wheel_pair_inertia_contribution(drone)
+    return -wheel_pair_mass * offset_z / _get_drone_mass(drone)
 
 
 def _get_drone_mass(drone: dict[str, Any]) -> float:
@@ -253,7 +273,13 @@ def _get_drone_diaginertia(drone: dict[str, Any]) -> tuple[float, float, float]:
         return diaginertia
 
     _, wheel_pair_inertia = _wheel_pair_inertia_contribution(drone)
-    body_diaginertia = tuple(total - wheels for total, wheels in zip(diaginertia, wheel_pair_inertia, strict=True))
+    # Parallel-axis shift of the central body from the origin to its own COM (only when offset_z != 0).
+    body_shift = _get_drone_mass(drone) * _get_body_com_z(drone) ** 2
+    body_shift_terms = (body_shift, body_shift, 0.0)
+    body_diaginertia = tuple(
+        total - wheels - shift
+        for total, wheels, shift in zip(diaginertia, wheel_pair_inertia, body_shift_terms, strict=True)
+    )
     if any(value <= 0.0 for value in body_diaginertia):
         raise ValueError(
             "drone.inertia (total_vehicle) minus the wheel contributions "
@@ -340,7 +366,7 @@ def _build_drone_body_block(params: dict[str, Any], rotor_specs: list[RotorSpec]
                 [
                     f'    <body {" ".join(body_attributes)}>',
                     '      <joint type="free"/>',
-                    f'      <inertial pos="0 0 0" mass="{format_scalar(drone_mass)}" diaginertia="{format_vector(list(drone_diaginertia))}"/>',
+                    f'      <inertial pos="{format_vector([0.0, 0.0, _get_body_com_z(drone)])}" mass="{format_scalar(drone_mass)}" diaginertia="{format_vector(list(drone_diaginertia))}"/>',
                     *rotor_site_lines,
                     *mesh_geom_lines,
                     f'      <geom name="{prefix}drone_body_box" type="box" size="{format_vector(drone["body_box"]["size"])}" euler="{format_vector(drone["body_box"]["euler"])}" mass="0" group="{format_scalar(drone["body_box"]["contact"]["group"])}" rgba="{format_vector(body_box_rgba)}" contype="{format_scalar(drone["body_box"]["contact"]["contype"])}" conaffinity="{format_scalar(drone["body_box"]["contact"]["conaffinity"])}"/>',

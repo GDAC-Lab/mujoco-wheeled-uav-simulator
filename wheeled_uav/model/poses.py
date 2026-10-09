@@ -129,6 +129,10 @@ def _get_initial_wheel_contact_clearance(surface_config: dict[str, Any], drone: 
     return base_initial_position[2] - wheel_radius
 
 
+def _wheel_offset_z(drone: dict[str, Any]) -> float:
+    return float(drone["wheels"].get("offset_z", 0.0))
+
+
 def _get_initial_pitch_angle(surface_evaluator: SurfaceEvaluator, x_coord: float, y_coord: float) -> float:
     dh_dx, _ = evaluate_height_gradient(surface_evaluator, x_coord, y_coord)
     return -math.atan(dh_dx)
@@ -244,7 +248,9 @@ def get_wall_contact_initial_pose(
     center_x = _resolve_wall_contact_center_x(environment, drone)
     resolved_x = center_x if x_coord is None else float(x_coord)
     resolved_y = base_initial_position[1] if y_coord is None else float(y_coord)
-    position = [resolved_x, resolved_y, base_initial_position[2]]
+    # center_x and initial_position[2] place the wheel axle; the body origin sits offset_z below it along b3.
+    axle_offset = rotation_matrix @ np.array([0.0, 0.0, _wheel_offset_z(drone)])
+    position = [resolved_x - float(axle_offset[0]), resolved_y - float(axle_offset[1]), base_initial_position[2] - float(axle_offset[2])]
     return InitialPoseSpec(position=position, quaternion=rotation_matrix_to_quaternion_wxyz(rotation_matrix))
 
 
@@ -273,6 +279,12 @@ def get_drone_initial_pose(
     base_clearance = _get_initial_wheel_contact_clearance(surface_config, drone)
     initial_position[2] = base_clearance + 0.5 * (left_height + right_height) + wheel_radius * math.cos(roll_angle)
     quaternion = _compose_roll_pitch_quaternion(roll_angle, pitch_angle)
+    # The height above places the wheel axle; the body origin sits offset_z below it along b3.
+    offset_z = _wheel_offset_z(drone)
+    if offset_z != 0.0:
+        w, x, y, z = quaternion
+        b3 = np.array([2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y)])
+        initial_position = [float(value) for value in np.asarray(initial_position) - offset_z * b3]
     return InitialPoseSpec(position=initial_position, quaternion=quaternion)
 
 
