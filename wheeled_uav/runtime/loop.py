@@ -76,6 +76,7 @@ class _SimulationRuntime:
         self.overlay_animator.update(scene.data, active)
         self.frame_recorder.capture(scene.data, active)
         mujoco.mj_step(scene.model, scene.data)
+        self.actuator_model.restore(scene.data)
 
     def publish_state(self, sock, realtime_factor: float, session_timing: SessionTimingTracker) -> None:
         self.state_publisher.send_state(

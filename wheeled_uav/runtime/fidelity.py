@@ -134,6 +134,16 @@ class ActuatorModel:
         )
         data.ctrl[:] = self._applied_ctrl
 
+    def restore(self, data: mujoco.MjData) -> None:
+        """Put the requested ctrl back after mj_step.
+
+        ``data.ctrl`` holds the request between steps; the command
+        dispatcher only rewrites it when a command arrives. Without this,
+        the next ``apply`` would read the applied value as the request and
+        the lag would advance only once per received command.
+        """
+        data.ctrl[:] = self._requested_ctrl
+
     def snapshot(self) -> ActuatorSnapshot:
         return ActuatorSnapshot(
             requested_ctrl=np.array(self._requested_ctrl, copy=True),

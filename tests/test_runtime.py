@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -9,6 +10,7 @@ import numpy as np
 from wheeled_uav.protocol import build_packet_metadata
 from wheeled_uav.runtime.command_dispatcher import ControlCommandDispatcher
 from wheeled_uav.runtime.fidelity import (
+    ActuatorModel,
     ActuatorSnapshot,
     apply_actuator_dynamics_step,
     apply_sensor_fidelity,
@@ -398,6 +400,28 @@ class PlantFidelityTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(applied, np.full(4, 4.0 / 11.0), rtol=1.0e-6, atol=1.0e-6)
+
+    def test_actuator_model_lag_advances_every_physics_step(self) -> None:
+        # One command held over several physics steps (as between control
+        # packets) must advance the lag on every step, not once per command.
+        model = SimpleNamespace(opt=SimpleNamespace(timestep=0.001), nu=4)
+        data = SimpleNamespace(ctrl=np.zeros(4))
+        actuator = ActuatorModel(
+            model,
+            FidelityConfig(mode="hil", actuator_dynamics=ActuatorDynamicsConfig(motor_tau_ms=10.0)),
+            2.0e-5,
+        )
+        actuator.apply(data)
+        actuator.restore(data)
+        data.ctrl[:] = 4.0
+        for _ in range(5):
+            actuator.apply(data)
+            actuator.restore(data)
+
+        alpha = 1.0 / 11.0
+        expected = 4.0 * (1.0 - (1.0 - alpha) ** 5)
+        np.testing.assert_allclose(actuator.snapshot().applied_ctrl, np.full(4, expected), rtol=1.0e-9)
+        np.testing.assert_allclose(data.ctrl, np.full(4, 4.0))
 
     def test_apply_actuator_dynamics_step_limits_thrust_rate(self) -> None:
         applied = apply_actuator_dynamics_step(
