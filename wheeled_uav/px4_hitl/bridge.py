@@ -12,6 +12,7 @@ connection window otherwise).
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import mujoco
@@ -47,6 +48,10 @@ class HilConfig:
     # ctrl[i] <- controls[motor_map[i]]。
     motor_map: tuple[int, int, int, int] = (0, 2, 3, 1)
     control_exponent: float = 2.0        # 正規化出力 u -> 推力 T = u^exp * ctrl上限（T∝Ω^2, Ω∝u の一次近似）
+    # PX4 の出力（HIL_ACTUATOR_CONTROLS、0..1）→ MuJoCo の ctrl（推力 [N]）の変換。None なら上の冪の近似
+    # （default_controls_to_ctrl）。実測の推力曲線を持つ利用者は、ブリッジを書き換えずにここへ関数を渡す。
+    # 呼び方は default_controls_to_ctrl と同じ: f(controls, motor_map, ctrl_hi, control_exponent) -> ndarray。
+    controls_to_ctrl: Callable[[Sequence[float], Sequence[int], np.ndarray, float], np.ndarray] | None = None
     control_timeout_s: float = 0.5       # controls 途絶時は全モータ 0（安全側）
     status_period_s: float = 1.0
     forward: str | None = None           # 例 "udpout:127.0.0.1:14550"（QGC 併用）
@@ -142,12 +147,17 @@ class OriginSetter:
         self.next_wall = now + self.config.origin_period_s
 
 
-def _map_controls_to_ctrl(controls, motor_map, ctrl_hi, exponent) -> np.ndarray:
+def default_controls_to_ctrl(controls, motor_map, ctrl_hi, exponent) -> np.ndarray:
+    """The bridge's own actuator mapping: thrust = u^exponent x the actuator's ctrl upper bound (u clipped to 0..1)."""
     ctrl = np.zeros(len(motor_map), dtype=float)
     for i, src in enumerate(motor_map):
         u = min(max(float(controls[src]), 0.0), 1.0)
         ctrl[i] = (u ** exponent) * float(ctrl_hi[i])
     return ctrl
+
+
+# The name used before HilConfig.controls_to_ctrl existed (kept for code that imports it).
+_map_controls_to_ctrl = default_controls_to_ctrl
 
 
 class AutoSequence:
@@ -257,6 +267,7 @@ def run_bridge(
         origin_alt_m=config.origin_alt_m,
     )
     ctrl_hi = np.array(model.actuator_ctrlrange[:, 1], dtype=float)
+    to_ctrl = config.controls_to_ctrl or default_controls_to_ctrl
 
     own_link = link is None
     if own_link:
@@ -301,7 +312,7 @@ def run_bridge(
                     and (time.monotonic() - link.latest_controls_wall_time) <= config.control_timeout_s
                 )
                 if fresh:
-                    data.ctrl[:] = _map_controls_to_ctrl(
+                    data.ctrl[:] = to_ctrl(
                         link.latest_controls, config.motor_map, ctrl_hi, config.control_exponent
                     )
                     stats.controls_applied_steps += 1

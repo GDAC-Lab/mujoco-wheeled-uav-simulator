@@ -16,7 +16,7 @@ English documentation: [README.md](README.md)
 
 **サンプルコントローラと実行シナリオ**（`realtime` / `accelerated` / `lockstep`、HIL、CI の組み合わせ）: [docs/CONTROLLERS.ja.md](docs/CONTROLLERS.ja.md) — 英語版 [docs/CONTROLLERS.md](docs/CONTROLLERS.md)。
 
-**PX4 HITL（実機 Pixhawk 接続）** — MuJoCo をプラントに、実機 PX4 の EKF2・制御スタックをそのまま動かす: `uv sync --extra hil` の後、`uv run python -m wheeled_uav.px4_hitl --help` を参照。
+**PX4 HITL（実機 Pixhawk 接続）** — MuJoCo をプラントに、実機 PX4 の EKF2・制御スタックをそのまま動かす: `uv sync --extra hil` の後、`uv run python -m wheeled_uav.px4_hitl --help` を参照。Python からブリッジを動かすコードは、ブリッジを書き換えずに、出力→推力の変換（実測の推力曲線など）を `HilConfig.controls_to_ctrl` に、リンクの包み（MAVLink の送受信を足す）を `run_bridge(..., link=...)` に渡せる。
 
 **壁面走行の最小デモ**（無改造のホバリング制御に壁の奥の目標位置を与えるだけ。車輪が壁面を転がる）: `wall_demo_controller`（MATLAB）＋ `wall_demo` プリセット — 下記のデモ節を参照。
 

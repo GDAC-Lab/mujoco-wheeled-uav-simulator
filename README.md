@@ -16,7 +16,7 @@ Fidelity-mode usage and publication-oriented logging notes are summarized in [do
 
 **Sample controllers and run scenarios** (`realtime` / `accelerated` / `lockstep`, HIL, CI): [docs/CONTROLLERS.md](docs/CONTROLLERS.md) — Japanese in [docs/CONTROLLERS.ja.md](docs/CONTROLLERS.ja.md).
 
-**PX4 HITL (real Pixhawk in the loop)** — MuJoCo as the plant, the real PX4 EKF2/control stack unchanged: `uv sync --extra hil`, then see `uv run python -m wheeled_uav.px4_hitl --help`.
+**PX4 HITL (real Pixhawk in the loop)** — MuJoCo as the plant, the real PX4 EKF2/control stack unchanged: `uv sync --extra hil`, then see `uv run python -m wheeled_uav.px4_hitl --help`. Code that runs the bridge from Python can pass its own actuator mapping (for example a measured thrust curve) as `HilConfig.controls_to_ctrl`, and its own link wrapper as `run_bridge(..., link=...)`, instead of patching the bridge.
 
 **Minimal wall-riding demo** (unmodified hover control with its target placed behind the wall face; wheels rolling on the wall): `wall_demo_controller` (MATLAB) with the `wall_demo` preset — see the demo section below.
 

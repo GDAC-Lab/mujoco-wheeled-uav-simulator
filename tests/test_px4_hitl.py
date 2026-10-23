@@ -14,6 +14,7 @@ from wheeled_uav.px4_hitl.bridge import (  # noqa: E402
     HilConfig,
     HilStats,
     _map_controls_to_ctrl,
+    default_controls_to_ctrl,
     run_bridge,
 )
 from wheeled_uav.px4_hitl.sensors import (  # noqa: E402
@@ -199,6 +200,24 @@ def test_bridge_closed_loop_with_fake_link():
     times = [s.time_usec for s in fake.sensor_samples]
     assert all(b > a for a, b in zip(times, times[1:]))
     assert np.linalg.norm(fake.sensor_samples[-1].quat_ned) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_bridge_uses_the_configured_actuator_mapping():
+    # HilConfig.controls_to_ctrl replaces the bridge's own power law (e.g. a measured thrust curve)
+    request = SimulationRequest(headless=True, duration_seconds=0.2, hold_until_first_command=False)
+    calls = []
+
+    def zero_thrust(controls, motor_map, ctrl_hi, exponent):
+        calls.append((tuple(motor_map), float(exponent)))
+        return np.zeros(len(motor_map))
+
+    fake = FakeLink(controls=[0.9] * 4 + [0.0] * 12)
+    stats = run_bridge(HilConfig(device="FAKE", mode="ev", controls_to_ctrl=zero_thrust), request, link=fake)
+    assert len(calls) == stats.controls_applied_steps > 0
+    assert calls[0] == ((0, 2, 3, 1), 2.0)
+    z = [s.pos_ned[2] for s in fake.sensor_samples]
+    assert max(z) - min(z) < 0.01           # no thrust: the vehicle stays on the ground despite controls of 0.9
+    assert _map_controls_to_ctrl is default_controls_to_ctrl
 
 
 def test_bridge_ev_mode_sends_normalized_odometry():
