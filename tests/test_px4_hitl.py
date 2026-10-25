@@ -228,6 +228,23 @@ def test_bridge_ev_mode_sends_normalized_odometry():
     assert len(fake.odom_msgs) == stats.odom_sent
 
 
+def test_odometry_frame_is_local_ned_with_a_normalized_quaternion():
+    """The pose is NED, the frame of the simulated magnetometer and HIL_GPS, so ODOMETRY says so (body FRD)."""
+    from types import SimpleNamespace
+
+    from wheeled_uav.px4_hitl.link import Px4HilLink
+
+    sent = []
+    link = Px4HilLink.__new__(Px4HilLink)          # no serial port: only the message encoder is replaced
+    link.conn = SimpleNamespace(mav=SimpleNamespace(odometry_send=lambda *args: sent.append(args)))
+    link.send_odometry(SimpleNamespace(time_usec=1_000_000, pos_ned=np.array([1.0, -2.0, -0.5]),
+                                       quat_ned=np.array([2.0, 0.0, 0.0, 0.0])))
+    (args,) = sent
+    assert args[1:3] == (1, 12)                    # MAV_FRAME_LOCAL_NED, MAV_FRAME_BODY_FRD
+    assert args[3:6] == (1.0, -2.0, -0.5)
+    assert np.allclose(args[6], [1.0, 0.0, 0.0, 0.0])
+
+
 def test_axis_flip_is_involution():
     assert np.allclose(AXIS_FLIP @ AXIS_FLIP, np.eye(3))
 

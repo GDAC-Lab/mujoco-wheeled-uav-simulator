@@ -13,7 +13,7 @@ import time
 
 import numpy as np
 
-MAV_FRAME_LOCAL_FRD = 20
+MAV_FRAME_LOCAL_NED = 1
 MAV_FRAME_BODY_FRD = 12
 MAV_ESTIMATOR_TYPE_VISION = 2
 MAV_MODE_FLAG_SAFETY_ARMED = 128
@@ -352,6 +352,9 @@ class Px4HilLink:
     def send_odometry(self, sample) -> None:
         """Ground-truth pose as External Vision (indoor mocap-equivalent mode).
 
+        位置・姿勢は NED（sensors.py の PX4 側の座標。地磁気・HIL_GPS と同じ）なので
+        MAV_FRAME_LOCAL_NED で送る。LOCAL_FRD は北と合っていない地上固定の座標の意味で、
+        PX4 はそのヨーを絶対の方位として使わない。
         クォータニオンは送信前に必ず正規化する（EKF2 はノルムゲート
         |1-||q|| <= 1e-5 を外れた ODOMETRY を破棄するため）。
         """
@@ -359,7 +362,7 @@ class Px4HilLink:
         q = q / np.linalg.norm(q)
         self.conn.mav.odometry_send(
             int(sample.time_usec),
-            MAV_FRAME_LOCAL_FRD,
+            MAV_FRAME_LOCAL_NED,
             MAV_FRAME_BODY_FRD,
             float(sample.pos_ned[0]), float(sample.pos_ned[1]), float(sample.pos_ned[2]),
             [float(q[0]), float(q[1]), float(q[2]), float(q[3])],
