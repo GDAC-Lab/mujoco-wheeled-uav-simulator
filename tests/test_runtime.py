@@ -241,7 +241,50 @@ class StatePayloadTests(unittest.TestCase):
         self.assertEqual(sock.sent_packets[0], (b"seq=1", ("127.0.0.1", 5001)))
 
 
+    def test_resend_last_repeats_the_packet_byte_for_byte(self) -> None:
+        publisher = StatePayloadPublisher(_DummyScene(FidelityConfig()))
+        publisher.build_payload = lambda realtime_factor, sequence, *args, **kwargs: f"seq={sequence}".encode("utf-8")
+        sock = _FakeSocket()
+
+        publisher.resend_last(sock, "127.0.0.1", 5001)  # nothing published yet: nothing to repeat
+        publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)
+        publisher.resend_last(sock, "127.0.0.1", 5001)
+        publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)
+
+        self.assertEqual([payload for payload, _ in sock.sent_packets], [b"seq=1", b"seq=1", b"seq=2"])
+
+
 class CommandDispatcherTests(unittest.TestCase):
+    def test_wait_for_command_asks_again_after_dropping_a_command(self) -> None:
+        fidelity = FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, packet_loss_percent=100.0))
+        dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, fidelity, num_uavs=1)
+        requests: list[int] = []
+
+        applied = dispatcher.wait_for_command(
+            _FakeSocket({"rotor_thrusts": [1.0, 1.0, 1.0, 1.0]}),
+            _FakeData(4),
+            request_again=lambda: requests.append(1),
+            timeout_seconds=0.05,
+        )
+
+        self.assertFalse(applied)
+        self.assertEqual(requests, [1])
+
+    def test_wait_for_command_asks_again_after_rejecting_a_stale_command(self) -> None:
+        fidelity = FidelityConfig(network=NetworkFidelityConfig(stale_command_threshold_ms=5.0))
+        dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, fidelity, num_uavs=1)
+        requests: list[int] = []
+
+        applied = dispatcher.wait_for_command(
+            _FakeSocket({"wall_time_send_ns": 1, "rotor_thrusts": [1.0, 1.0, 1.0, 1.0]}),
+            _FakeData(4),
+            request_again=lambda: requests.append(1),
+            timeout_seconds=0.05,
+        )
+
+        self.assertFalse(applied)
+        self.assertEqual(requests, [1])
+
     def test_tracks_sequence_gap_for_fresh_commands(self) -> None:
         dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, FidelityConfig(), num_uavs=1)
         data = _FakeData(4)

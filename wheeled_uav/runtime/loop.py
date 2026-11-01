@@ -89,6 +89,9 @@ class _SimulationRuntime:
             timing=session_timing.snapshot(self.scene.data.time, realtime_factor),
         )
 
+    def republish_state(self, sock) -> None:
+        self.state_publisher.resend_last(sock, self.scene.request.state_target_ip, self.send_port)
+
 
 def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handle | None) -> None:
     runtime = _SimulationRuntime(scene)
@@ -163,8 +166,11 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     Removes the wall-clock coupling of the realtime loop (the physics only
     advances in response to controller commands), which makes runs exactly
     reproducible and lets slow controllers or large teams run without
-    real-time pressure. While waiting, the current state is republished every
-    second so a late-connecting controller can join.
+    real-time pressure. While waiting, the current state packet is re-sent
+    unchanged every second so a late-connecting controller can join; the copy
+    carries the same sequence number, so controllers skip it as a duplicate.
+    A command that arrives but is thrown away (HIL packet loss, stale) is
+    answered with a freshly published state, which the controller answers.
     """
     runtime = _SimulationRuntime(scene)
     publish_every = runtime.timing_config.state_publish_every_n_steps
@@ -174,10 +180,15 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     def publish_state() -> None:
         runtime.publish_state(sock, 1.0, session_timing)
 
+    def republish_state() -> None:
+        runtime.republish_state(sock)
+
     publish_state()
     try:
         while (viewer is None or viewer.is_running()) and (duration_seconds is None or scene.data.time < duration_seconds):
-            if not runtime.command_dispatcher.wait_for_command(sock, scene.data, republish=publish_state):
+            if not runtime.command_dispatcher.wait_for_command(
+                sock, scene.data, republish=republish_state, request_again=publish_state
+            ):
                 print("lockstep: no control command received within the timeout; stopping simulation")
                 return
             for _ in range(publish_every):

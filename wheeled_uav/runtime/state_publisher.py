@@ -181,6 +181,7 @@ class StatePayloadPublisher:
     def __init__(self, scene: SimulationScene):
         self._scene = scene
         self._sequence = 0
+        self._last_payload: bytes | None = None
         self._pending_datagrams: list[PendingDatagram] = []
         self._rng = random.Random(0)
         self._sensor_rng = np.random.default_rng(0)
@@ -250,6 +251,21 @@ class StatePayloadPublisher:
             aero_snapshot=aero_snapshot,
             timing=timing,
         )
+        self._last_payload = payload
+        self._dispatch(sock, target_ip, send_port, payload, now_ns)
+
+    def resend_last(self, sock: socket.socket, target_ip: str, send_port: int) -> None:
+        """Send the latest state packet again, byte for byte.
+
+        Lockstep pacing re-sends the current state while it waits for a
+        command, so that a controller connecting late still gets one. Keeping
+        the sequence number lets controllers drop the copy as a duplicate
+        sample instead of answering it with a second command.
+        """
+        if self._last_payload is not None:
+            self._dispatch(sock, target_ip, send_port, self._last_payload, time.time_ns())
+
+    def _dispatch(self, sock: socket.socket, target_ip: str, send_port: int, payload: bytes, now_ns: int) -> None:
         if not self._network_fidelity_enabled():
             sock.sendto(payload, (target_ip, send_port))
             return

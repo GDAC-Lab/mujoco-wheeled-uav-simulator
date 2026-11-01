@@ -31,6 +31,8 @@ Canonical implementation: [`wheeled_uav/timing.py`](../wheeled_uav/timing.py).
 
 In `lockstep`, wall-clock diagnostics lose their usual meaning: `realtime_factor` and `sim_wall_skew_seconds` track how fast the controller responds rather than physical pacing, and `simulation.hold_until_first_command` is irrelevant because physics only advances on received commands anyway. The controller-side rules above stay identical — a compliant controller works in all three modes unchanged.
 
+While it blocks, the `lockstep` simulator re-sends the last state packet unchanged once per second, so a controller that starts late still receives a sample. The copy keeps its `sequence`, so the duplicate-sample rule drops it instead of answering it with a second command. A command that arrives but is thrown away (dropped by the HIL network model or rejected as stale) is different: the controller has already answered, so the simulator publishes the current state again at once under a new `sequence`, and the controller answers that.
+
 **Avoid:** a controller-side “sync mode” that pauses on `sim_wall_skew` or `state.time` to align wall clocks. That introduces dead time and makes the loop feel slower than real time.
 
 For remote HIL, use **`realtime`**: the simulator owns wall-clock pacing; the controller never waits and reacts event-driven to new UDP samples.

@@ -84,6 +84,9 @@ class ControlCommandDispatcher:
         self.has_received_command = False
         # Counter of fresh (non-stale) commands applied; lockstep mode blocks on it.
         self.applied_command_count = 0
+        # Counter of received commands that were thrown away (dropped by the HIL
+        # network model or rejected as stale); lockstep asks again after one.
+        self.discarded_command_count = 0
         # Body ids for optional external body-wrench application (tilt-rotor
         # emulation); populated by bind_bodies once the model is built.
         self._uav_body_ids: list[int] | None = None
@@ -128,6 +131,7 @@ class ControlCommandDispatcher:
 
     def _queue_incoming_command(self, command_packet: CommandPacket, now_ns: int) -> None:
         if self._should_drop_packet():
+            self.discarded_command_count += 1
             return
         delay_ms = self._sample_delay_ms(self._fidelity.network.command_rx_latency_ms)
         release_time_ns = now_ns + int(delay_ms * 1.0e6)
@@ -233,6 +237,7 @@ class ControlCommandDispatcher:
 
         is_stale = self._update_metrics(control_command, now_ns)
         if is_stale:
+            self.discarded_command_count += 1
             # _last_command must keep the last FRESH command here: overwriting
             # it first would make hold-last-command replay the stale packet.
             self._apply_stale_policy(data)
@@ -268,21 +273,35 @@ class ControlCommandDispatcher:
         apply_body_wrenches(data, self._uav_body_ids, self._last_body_wrenches)
         self._wrench_rows_dirty = self._last_body_wrenches is not None
 
-    def wait_for_command(self, sock: socket.socket, data: mujoco.MjData, republish=None, timeout_seconds: float = 120.0) -> bool:
+    def wait_for_command(
+        self,
+        sock: socket.socket,
+        data: mujoco.MjData,
+        republish=None,
+        timeout_seconds: float = 120.0,
+        request_again=None,
+    ) -> bool:
         """Block until a fresh control command has been applied (lockstep mode).
 
         While waiting, optionally re-invokes `republish` every second so a
-        late-connecting controller still receives the current state.
-        Returns False on timeout.
+        late-connecting controller still receives the current state. When a
+        command arrives but is thrown away (dropped by the HIL network model
+        or rejected as stale), `request_again` is invoked at once: the
+        controller has already answered the current state and needs a new
+        sample to answer again. Returns False on timeout.
         """
         target_count = self.applied_command_count + 1
         start_time = time.monotonic()
         last_republish = start_time
         while time.monotonic() - start_time < timeout_seconds:
+            discarded_before = self.discarded_command_count
             self.apply_next_command(sock, data)
             if self.applied_command_count >= target_count:
                 return True
             now = time.monotonic()
+            if request_again is not None and self.discarded_command_count > discarded_before:
+                request_again()
+                last_republish = now
             if republish is not None and now - last_republish >= 1.0:
                 republish()
                 last_republish = now
