@@ -22,7 +22,8 @@ from ..timing import (
 from .aerodynamics import AerodynamicsModel
 from .command_dispatcher import ControlCommandDispatcher
 from .fidelity import ActuatorModel
-from .scene import SimulationRequest, SimulationScene, load_simulation_scene, resolve_timing_config
+from .parallel import ParallelPhysics
+from .scene import SimulationRequest, SimulationScene, load_simulation_scene, resolve_physics_threads, resolve_timing_config
 from .state_publisher import StatePayloadPublisher
 from .visuals import FrameRecorder, WallOverlayAnimator, configure_viewer
 
@@ -37,6 +38,9 @@ class _SimulationRuntime:
     """Bundles the per-run runtime components shared by both loop flavors."""
 
     def __init__(self, scene: SimulationScene):
+        physics_threads = resolve_physics_threads(scene)
+        if physics_threads > 0 and scene.request.record_path is not None:
+            raise ValueError("--record is not supported with parallel physics (simulation.physics_threads)")
         self.scene = scene
         self.state_publisher = StatePayloadPublisher(scene)
         self.command_dispatcher = ControlCommandDispatcher(scene.params, scene.fidelity, scene.request.num_uavs)
@@ -63,6 +67,28 @@ class _SimulationRuntime:
         self.step_wall_seconds = 0.0
         self.publish_wall_seconds = 0.0
         self.command_wait_wall_seconds: float | None = None
+        self.parallel_physics = ParallelPhysics(scene, physics_threads) if physics_threads > 0 else None
+
+    def _hooks_change_within_a_step_batch(self) -> bool:
+        # Actuator lag (HIL) and aerodynamics rewrite the controls or wrenches
+        # every physics step; without them a batch of steps can run in one go.
+        return self.scene.fidelity.mode == "hil" or self.aerodynamics_model.active
+
+    def advance(self, nstep: int) -> None:
+        """Step the physics `nstep` times (one control period in lockstep)."""
+        if self.parallel_physics is None or self._hooks_change_within_a_step_batch():
+            for _ in range(nstep):
+                self.step_physics_once()
+            return
+        started = time.perf_counter()
+        scene = self.scene
+        active = self.command_dispatcher.applied_command_count > 0
+        self.command_dispatcher.refresh_body_wrenches(scene.data)
+        self.actuator_model.apply(scene.data)
+        self.overlay_animator.update(scene.data, active)
+        self.parallel_physics.step(scene.data, nstep)
+        self.actuator_model.restore(scene.data)
+        self.step_wall_seconds += time.perf_counter() - started
 
     def step_physics_once(self) -> None:
         """Actuator/aero effects + visual bookkeeping + one mj_step."""
@@ -82,7 +108,10 @@ class _SimulationRuntime:
         self.aerodynamics_model.apply(scene.data)
         self.overlay_animator.update(scene.data, active)
         self.frame_recorder.capture(scene.data, active)
-        mujoco.mj_step(scene.model, scene.data)
+        if self.parallel_physics is None:
+            mujoco.mj_step(scene.model, scene.data)
+        else:
+            self.parallel_physics.step(scene.data, 1)
         self.actuator_model.restore(scene.data)
         self.step_wall_seconds += time.perf_counter() - started
 
@@ -93,6 +122,11 @@ class _SimulationRuntime:
         timing["publish_wall_seconds"] = self.publish_wall_seconds
         if self.command_wait_wall_seconds is not None:
             timing["command_wait_wall_seconds"] = self.command_wait_wall_seconds
+        contact_reports = None
+        if self.parallel_physics is not None:
+            contact_reports = self.parallel_physics.contact_reports(
+                self.scene.surface_evaluator, self.scene.fidelity.logging.include_contact_details
+            )
         self.state_publisher.send_state(
             sock,
             self.scene.request.state_target_ip,
@@ -101,9 +135,15 @@ class _SimulationRuntime:
             self.actuator_model.snapshot(),
             aero_snapshot=self.aerodynamics_model.snapshot(),
             timing=timing,
+            contact_reports=contact_reports,
         )
         self.step_wall_seconds = 0.0
         self.publish_wall_seconds = time.perf_counter() - started
+
+    def close(self) -> None:
+        self.frame_recorder.close()
+        if self.parallel_physics is not None:
+            self.parallel_physics.close()
 
     def republish_state(self, sock) -> None:
         self.state_publisher.resend_last(sock, self.scene.request.state_target_ip, self.send_port)
@@ -161,10 +201,14 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                     scene.data.qpos[:] = initial_qpos
                     scene.data.qvel[:] = initial_qvel
                     mujoco.mj_forward(scene.model, scene.data)
+                    if runtime.parallel_physics is not None:
+                        runtime.parallel_physics.load_state(scene.data)
                 step_count += 1
                 if step_count % publish_every == 0:
                     runtime.publish_state(sock, realtime_tracker.realtime_factor, session_timing)
                 if viewer is not None and step_count % viewer_sync_every == 0:
+                    if runtime.parallel_physics is not None:
+                        mujoco.mj_kinematics(scene.model, scene.data)  # poses for display
                     viewer.sync()
 
                 pacer.pace()
@@ -174,7 +218,7 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 if use_realtime_pacing:
                     lag_monitor.check(realtime_tracker.realtime_factor)
     finally:
-        runtime.frame_recorder.close()
+        runtime.close()
 
 
 def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handle | None) -> None:
@@ -212,13 +256,14 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 print("lockstep: no control command received within the timeout; stopping simulation")
                 return
             runtime.command_wait_wall_seconds = time.perf_counter() - wait_started
-            for _ in range(publish_every):
-                runtime.step_physics_once()
+            runtime.advance(publish_every)
             publish_state()
             if viewer is not None:
+                if runtime.parallel_physics is not None:
+                    mujoco.mj_kinematics(scene.model, scene.data)  # poses for display
                 viewer.sync()
     finally:
-        runtime.frame_recorder.close()
+        runtime.close()
 
 
 def run_viewer_loop(scene: SimulationScene, sock) -> None:

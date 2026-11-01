@@ -247,10 +247,11 @@ class StatePayloadTests(unittest.TestCase):
             )
         )
 
-        def build_payload(realtime_factor, sequence, wall_time_send_ns, actuator_snapshot, aero_snapshot=None, timing=None):
+        def build_payload(realtime_factor, sequence, wall_time_send_ns, actuator_snapshot, aero_snapshot=None, timing=None, contact_reports=None):
             self.assertIsNone(actuator_snapshot)
             self.assertIsNone(aero_snapshot)
             self.assertIsNone(timing)
+            self.assertIsNone(contact_reports)
             return f"seq={sequence}".encode("utf-8")
 
         publisher.build_payload = build_payload

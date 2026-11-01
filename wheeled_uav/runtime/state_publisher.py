@@ -116,17 +116,23 @@ def build_state_payload(
     actuator_snapshot: ActuatorSnapshot | None = None,
     aero_snapshot: list[dict[str, object]] | None = None,
     timing: dict[str, float] | None = None,
+    contact_reports: list[dict[str, Any]] | None = None,
 ) -> bytes:
-    """Serialize the scene state into a single-UAV or multi-UAV JSON packet."""
-    contact_reports = build_contact_reports(
-        scene.model,
-        scene.data,
-        scene.surface_evaluator,
-        scene.uav_specs,
-        geom_names=scene.geom_names,
-        include_details=scene.fidelity.logging.include_contact_details,
-        attribution=scene.contact_attribution,
-    )
+    """Serialize the scene state into a single-UAV or multi-UAV JSON packet.
+
+    `contact_reports` (one per UAV) replaces the reports built from the scene's
+    own contacts, for runtimes that step the vehicles elsewhere.
+    """
+    if contact_reports is None:
+        contact_reports = build_contact_reports(
+            scene.model,
+            scene.data,
+            scene.surface_evaluator,
+            scene.uav_specs,
+            geom_names=scene.geom_names,
+            include_details=scene.fidelity.logging.include_contact_details,
+            attribution=scene.contact_attribution,
+        )
     uav_states = [
         _build_uav_state(
             scene,
@@ -218,6 +224,7 @@ class StatePayloadPublisher:
         *,
         aero_snapshot: list[dict[str, object]] | None = None,
         timing: dict[str, float] | None = None,
+        contact_reports: list[dict[str, Any]] | None = None,
     ) -> bytes:
         return build_state_payload(
             self._scene,
@@ -228,6 +235,7 @@ class StatePayloadPublisher:
             actuator_snapshot=actuator_snapshot,
             aero_snapshot=aero_snapshot,
             timing=timing,
+            contact_reports=contact_reports,
         )
 
     def send_state(
@@ -240,6 +248,7 @@ class StatePayloadPublisher:
         *,
         aero_snapshot: list[dict[str, object]] | None = None,
         timing: dict[str, float] | None = None,
+        contact_reports: list[dict[str, Any]] | None = None,
     ) -> None:
         self._sequence += 1
         now_ns = wall_time_ns()
@@ -250,6 +259,7 @@ class StatePayloadPublisher:
             actuator_snapshot,
             aero_snapshot=aero_snapshot,
             timing=timing,
+            contact_reports=contact_reports,
         )
         self._last_payload = payload
         self._dispatch(sock, target_ip, send_port, payload, now_ns)

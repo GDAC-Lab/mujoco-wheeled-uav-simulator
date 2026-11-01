@@ -67,7 +67,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     # Defaults for a bare invocation (no subcommand -> simulate). Every option
     # read by the simulate handler must appear here or a bare run raises
     # AttributeError; test_cli.py pins this by asserting parse_args([]).
-    parser.set_defaults(instance_id=0, num_uavs=1, spawn_radius=1.5, recv_port=None, send_port=None, bind_ip=None, state_target_ip=None, params_file=None, preset=None, xml_template_file=None, generated_xml_dir=None, fidelity_mode=None, pacing_mode=None, headless=False, duration_seconds=None, record=None, hold_until_first_command=None)
+    parser.set_defaults(instance_id=0, num_uavs=1, spawn_radius=1.5, recv_port=None, send_port=None, bind_ip=None, state_target_ip=None, params_file=None, preset=None, xml_template_file=None, generated_xml_dir=None, fidelity_mode=None, pacing_mode=None, headless=False, duration_seconds=None, record=None, hold_until_first_command=None, physics_threads=None)
     subparsers = parser.add_subparsers(dest="command")
 
     simulate_parser = subparsers.add_parser("simulate", help="Run the MuJoCo simulator with viewer")
@@ -93,6 +93,17 @@ def build_cli_parser() -> argparse.ArgumentParser:
             "disable it in their JSON instead). Overrides simulation.hold_until_first_command in the params file; "
             "the default vehicle_params.json enables it. No effect in lockstep pacing, where "
             "physics only advances on received commands anyway."
+        ),
+    )
+    simulate_parser.add_argument(
+        "--physics-threads",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Simulate each UAV in a physics world of its own and step the worlds on N threads "
+            "(0: one world for all UAVs, the default). Vehicles in separate worlds do not collide "
+            "with each other. Overrides simulation.physics_threads in the params file."
         ),
     )
     simulate_parser.add_argument("--record", default=None, metavar="PATH", help="Also write an offscreen render of the run to this video file (extension picks the format, e.g. .mp4 or .gif). Resolution/fps come from environment.recording in the params.")
@@ -138,6 +149,8 @@ def _validate_arguments(parser: argparse.ArgumentParser, arguments: argparse.Nam
         parser.error("--spawn-radius must be non-negative")
     if arguments.duration_seconds is not None and arguments.duration_seconds <= 0.0:
         parser.error("--duration-seconds must be positive")
+    if getattr(arguments, "physics_threads", None) is not None and arguments.physics_threads < 0:
+        parser.error("--physics-threads must be non-negative")
     if getattr(arguments, "state_timeout_seconds", 1.0) <= 0.0:
         parser.error("--state-timeout-seconds must be positive")
     if getattr(arguments, "status_display_interval", 1.0) <= 0.0:
@@ -171,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                 duration_seconds=arguments.duration_seconds,
                 record_path=arguments.record,
                 hold_until_first_command=arguments.hold_until_first_command,
+                physics_threads=arguments.physics_threads,
             )
         )
         return 0

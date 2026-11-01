@@ -28,6 +28,7 @@ __all__ = [
     "build_sensor_layouts",
     "load_simulation_scene",
     "render_simulation_model",
+    "resolve_physics_threads",
     "resolve_timing_config",
     "validate_model",
 ]
@@ -56,6 +57,8 @@ class SimulationRequest:
     record_path: str | Path | None = None
     # None -> use simulation.hold_until_first_command from the params file.
     hold_until_first_command: bool | None = None
+    # None -> use simulation.physics_threads from the params file.
+    physics_threads: int | None = None
 
     def resolved_ports(self) -> tuple[int, int]:
         default_recv_port, default_send_port = get_instance_ports(self.instance_id)
@@ -87,6 +90,9 @@ class SimulationScene:
     # Which UAV owns each geom; computed once so the per-packet contact
     # reports need only a single pass over the contacts.
     contact_attribution: ContactAttribution | None = None
+    # The resolver the scene was rendered with (None: the default one), for
+    # models rendered later from the same params (parallel physics).
+    path_resolver: PathResolver | None = None
 
 
 def _get_sensor_slice(model: mujoco.MjModel, sensor_name: str) -> slice:
@@ -187,7 +193,19 @@ def load_simulation_scene(
         uav_specs=rendered_model.uav_specs,
         geom_names=build_geom_name_lookup(model),
         contact_attribution=build_contact_attribution(model, rendered_model.uav_specs),
+        path_resolver=path_resolver,
     )
+
+
+def resolve_physics_threads(scene: SimulationScene) -> int:
+    """0: one world holding every vehicle; n >= 1: a world per vehicle, stepped on n threads."""
+    if scene.request.physics_threads is not None:
+        threads = int(scene.request.physics_threads)
+    else:
+        threads = int(scene.params.get("simulation", {}).get("physics_threads", 0))
+    if threads < 0:
+        raise ValueError("simulation.physics_threads must be non-negative")
+    return threads
 
 
 def resolve_timing_config(scene: SimulationScene) -> SimulationTimingConfig:
