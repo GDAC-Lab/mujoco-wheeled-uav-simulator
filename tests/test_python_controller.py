@@ -18,6 +18,7 @@ from wheeled_uav.controllers.hover import (
     build_hover_controller_config,
     compute_hover_control,
 )
+from wheeled_uav.state_packets import encode_state_packet
 from wheeled_uav.timing import StateSampleTracker, build_state_sample_key
 
 
@@ -259,6 +260,27 @@ class PythonHoverControllerTests(unittest.TestCase):
         assert state_packet is not None
         state, metrics = state_packet
         self.assertEqual(state["time"], 0.2)
+        self.assertEqual(metrics.sequence, 4)
+        self.assertAlmostEqual(metrics.age_ms or 0.0, 2.0)
+
+    def test_read_latest_state_accepts_binary_packets(self) -> None:
+        summary = dict.fromkeys(("count", "total_force_magnitude", "max_force_magnitude", "total_normal_force", "max_normal_force"), 0.0)
+        uav_state = {
+            "name": "uav_0", "time": 0.2, **self.nominal_state, "angular_velocity_world": [0.0, 0.0, 0.0],
+            "z": 1.5, "vz": 0.0, "yaw_rate": 0.0, "realtime_factor": 1.0, "instance_id": 0,
+            "contact_summary": {**summary, "count": 0, **{group: dict(summary) for group in ("left_wheel", "right_wheel", "surface", "wall")}},
+            "contacts": [],
+        }
+        header = {"protocol_version": 2, "sequence": 4, "wall_time_send_ns": 10, "fidelity_mode": "baseline", "sim_time": 0.2}
+        sock = _FakeSocket()
+        sock._queue = [encode_state_packet(header, [uav_state])]
+
+        with patch("wheeled_uav.controllers.hover.wall_time_ns", return_value=2_000_010):
+            state_packet = _read_latest_state(sock)
+
+        assert state_packet is not None
+        state, metrics = state_packet
+        self.assertEqual(state, {**header, **uav_state})
         self.assertEqual(metrics.sequence, 4)
         self.assertAlmostEqual(metrics.age_ms or 0.0, 2.0)
 

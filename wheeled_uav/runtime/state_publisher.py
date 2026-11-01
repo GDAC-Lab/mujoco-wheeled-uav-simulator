@@ -12,15 +12,20 @@ import numpy as np
 
 from ..clock import wall_time_ns
 from ..protocol import build_packet_metadata
+from ..state_packets import encode_state_packet
 from ..types import SensorLayout, UAVModelSpec
 from .contact import build_contact_reports
 from .fidelity import ActuatorSnapshot, apply_sensor_fidelity
-from .scene import SimulationScene
+from .scene import SimulationScene, resolve_state_format
 
 __all__ = [
     "StatePayloadPublisher",
     "build_state_payload",
 ]
+
+
+# Largest UDP payload over IPv4 (65535 minus the IP and UDP headers).
+_MAX_DATAGRAM_BYTES = 65507
 
 
 @dataclass(frozen=True)
@@ -117,11 +122,14 @@ def build_state_payload(
     aero_snapshot: list[dict[str, object]] | None = None,
     timing: dict[str, float] | None = None,
     contact_reports: list[dict[str, Any]] | None = None,
+    state_format: str = "json",
 ) -> bytes:
-    """Serialize the scene state into a single-UAV or multi-UAV JSON packet.
+    """Serialize the scene state into a single-UAV or multi-UAV state packet.
 
     `contact_reports` (one per UAV) replaces the reports built from the scene's
-    own contacts, for runtimes that step the vehicles elsewhere.
+    own contacts, for runtimes that step the vehicles elsewhere. `state_format`
+    "binary" encodes the same content compactly (see wheeled_uav.state_packets),
+    with the contact summaries but without the per-contact details.
     """
     if contact_reports is None:
         contact_reports = build_contact_reports(
@@ -130,7 +138,7 @@ def build_state_payload(
             scene.surface_evaluator,
             scene.uav_specs,
             geom_names=scene.geom_names,
-            include_details=scene.fidelity.logging.include_contact_details,
+            include_details=scene.fidelity.logging.include_contact_details and state_format == "json",
             attribution=scene.contact_attribution,
         )
     uav_states = [
@@ -157,6 +165,8 @@ def build_state_payload(
     if timing is not None:
         packet["timing"] = timing
 
+    if state_format == "binary":
+        return encode_state_packet(packet, uav_states)
     if len(uav_states) == 1:
         return json.dumps(
             {
@@ -191,6 +201,23 @@ class StatePayloadPublisher:
         self._pending_datagrams: list[PendingDatagram] = []
         self._rng = random.Random(0)
         self._sensor_rng = np.random.default_rng(0)
+        self._state_format = resolve_state_format(scene)
+        if self._state_format == "binary":
+            logging = scene.fidelity.logging
+            if logging.log_actuator_stats or logging.log_sensor_truth:
+                raise ValueError(
+                    'simulation.state_format "binary" carries no actuator stats or sensor truth: turn off '
+                    "logging_config.log_actuator_stats and log_sensor_truth, or use the JSON state format"
+                )
+            # Per-contact details are on unless switched off; binary packets
+            # carry the contact summaries only, so the details are not built.
+            if scene.params.get("logging_config", {}).get("include_contact_details") is True:
+                print("binary state packets carry the contact summaries only; per-contact details are not sent")
+
+    @property
+    def include_contact_details(self) -> bool:
+        """Whether the packets list every contact (JSON packets with logging_config.include_contact_details)."""
+        return self._state_format == "json" and self._scene.fidelity.logging.include_contact_details
 
     def _network_fidelity_enabled(self) -> bool:
         return self._scene.fidelity.mode == "hil" and self._scene.fidelity.network.enabled
@@ -236,6 +263,7 @@ class StatePayloadPublisher:
             aero_snapshot=aero_snapshot,
             timing=timing,
             contact_reports=contact_reports,
+            state_format=self._state_format,
         )
 
     def send_state(
@@ -276,6 +304,11 @@ class StatePayloadPublisher:
             self._dispatch(sock, target_ip, send_port, self._last_payload, wall_time_ns())
 
     def _dispatch(self, sock: socket.socket, target_ip: str, send_port: int, payload: bytes, now_ns: int) -> None:
+        if len(payload) > _MAX_DATAGRAM_BYTES:
+            raise ValueError(
+                f"the state packet is {len(payload)} bytes, more than one UDP datagram holds "
+                f'({_MAX_DATAGRAM_BYTES}); for large teams set simulation.state_format to "binary"'
+            )
         if not self._network_fidelity_enabled():
             sock.sendto(payload, (target_ip, send_port))
             return

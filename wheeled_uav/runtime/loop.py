@@ -23,7 +23,14 @@ from .aerodynamics import AerodynamicsModel
 from .command_dispatcher import ControlCommandDispatcher
 from .fidelity import ActuatorModel
 from .parallel import ParallelPhysics
-from .scene import SimulationRequest, SimulationScene, load_simulation_scene, resolve_physics_threads, resolve_timing_config
+from .scene import (
+    SimulationRequest,
+    SimulationScene,
+    load_simulation_scene,
+    resolve_physics_threads,
+    resolve_state_format,
+    resolve_timing_config,
+)
 from .state_publisher import StatePayloadPublisher
 from .visuals import FrameRecorder, WallOverlayAnimator, configure_viewer
 
@@ -57,6 +64,11 @@ class _SimulationRuntime:
             scene.uav_specs,
             scene.sensor_layouts,
         )
+        if self.aerodynamics_model.active and resolve_state_format(scene) == "binary":
+            raise ValueError(
+                'simulation.state_format "binary" carries no aerodynamics log; use the JSON state format '
+                "while the aerodynamics section is enabled"
+            )
         self.overlay_animator = WallOverlayAnimator(scene)
         self.frame_recorder = FrameRecorder(scene, scene.request.record_path)
         self.timing_config = resolve_timing_config(scene)
@@ -125,7 +137,7 @@ class _SimulationRuntime:
         contact_reports = None
         if self.parallel_physics is not None:
             contact_reports = self.parallel_physics.contact_reports(
-                self.scene.surface_evaluator, self.scene.fidelity.logging.include_contact_details
+                self.scene.surface_evaluator, self.state_publisher.include_contact_details
             )
         self.state_publisher.send_state(
             sock,

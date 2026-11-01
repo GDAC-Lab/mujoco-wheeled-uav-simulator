@@ -18,6 +18,7 @@ This module is a geometric-hover reference. For a minimal wall-riding example
 
 import json
 import socket
+import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ from ..config import build_fidelity_config, load_vehicle_params, parse_total_mas
 from ..clock import wall_time_ns
 from ..model.builder import build_allocation_matrix, build_rotor_specs
 from ..protocol import RECV_BUFFER_SIZE, UDP_IP, create_udp_socket, get_instance_ports
+from ..state_packets import decode_state_packet
 from ..timing import (
     StateSampleTracker,
     extract_sync_metrics,
@@ -337,8 +339,8 @@ def _read_latest_state(sock: socket.socket) -> tuple[dict[str, Any], StatePacket
 
     receive_time_ns = wall_time_ns()
     try:
-        state = json.loads(latest_packet.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        state = decode_state_packet(latest_packet)
+    except (UnicodeDecodeError, ValueError, struct.error):
         # A truncated or foreign datagram must not kill the controller; the
         # next state packet arrives within one publish period anyway.
         return None

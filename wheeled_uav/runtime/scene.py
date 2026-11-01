@@ -29,6 +29,7 @@ __all__ = [
     "load_simulation_scene",
     "render_simulation_model",
     "resolve_physics_threads",
+    "resolve_state_format",
     "resolve_timing_config",
     "validate_model",
 ]
@@ -59,6 +60,8 @@ class SimulationRequest:
     hold_until_first_command: bool | None = None
     # None -> use simulation.physics_threads from the params file.
     physics_threads: int | None = None
+    # None -> use simulation.state_format from the params file.
+    state_format: str | None = None
 
     def resolved_ports(self) -> tuple[int, int]:
         default_recv_port, default_send_port = get_instance_ports(self.instance_id)
@@ -206,6 +209,20 @@ def resolve_physics_threads(scene: SimulationScene) -> int:
     if threads < 0:
         raise ValueError("simulation.physics_threads must be non-negative")
     return threads
+
+
+STATE_FORMATS = ("json", "binary")
+
+
+def resolve_state_format(scene: SimulationScene) -> str:
+    """How state packets are encoded: "json" (default) or "binary" (see wheeled_uav.state_packets)."""
+    state_format = scene.request.state_format
+    if state_format is None:
+        state_format = scene.params.get("simulation", {}).get("state_format", "json")
+    state_format = str(state_format).strip().lower()
+    if state_format not in STATE_FORMATS:
+        raise ValueError(f"simulation.state_format must be one of {STATE_FORMATS}")
+    return state_format
 
 
 def resolve_timing_config(scene: SimulationScene) -> SimulationTimingConfig:

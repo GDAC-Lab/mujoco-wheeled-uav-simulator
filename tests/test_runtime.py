@@ -81,6 +81,7 @@ class _DummyRequest:
     def __init__(self, fidelity_mode: str):
         self.instance_id = 0
         self.fidelity_mode = fidelity_mode
+        self.state_format = None
 
 
 class _DummyScene:
@@ -94,6 +95,7 @@ class _DummyScene:
         uav_specs: list[UAVModelSpec] | None = None,
     ):
         self.fidelity = fidelity
+        self.params: dict = {}
         self.request = _DummyRequest(fidelity.mode)
         self.model = object()
         self.data = _FakeSensorData()
