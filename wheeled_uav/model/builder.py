@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -662,6 +663,12 @@ def build_xml_replacements(params: dict[str, Any], num_uavs: int = 1, spawn_radi
     rotor_specs = build_rotor_specs(params)
     uav_specs = build_uav_model_specs(params, num_uavs)
     initial_poses = build_initial_poses(params["drone"], surface_spec, num_uavs, spawn_radius, environment=params.get("environment"))
+    # Velocities cannot be written into the XML; the runtime applies them to
+    # mjData when it loads the scene (runtime.scene.apply_initial_velocities).
+    uav_specs = [
+        replace(uav_spec, initial_velocity=initial_pose.velocity)
+        for uav_spec, initial_pose in zip(uav_specs, initial_poses, strict=True)
+    ]
 
     replacements = {
         "__STATISTIC_EXTENT__": format_scalar(environment["statistic_extent"]),

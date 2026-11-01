@@ -278,13 +278,14 @@ MATLAB controller のローカル UDP ポートが既に使用中だと表示さ
 - 任意のソルバ設定: `simulation.integrator`（`Euler`, `RK4`, `implicit`, `implicitfast`）、`simulation.cone`（`pyramidal`, `elliptic`）、`simulation.iterations`、`simulation.noslip_iterations`
 - 状態送信の間引き `simulation.state_publish_every_n_steps`（既定 1 = 毎ステップ；同梱 config は 5 = 200 Hz）
 - ビューア更新レート `simulation.viewer_fps`（既定 60；物理レートとは非同期）
-- 起動時フリーズ `simulation.hold_until_first_command`（既定 config では `true`）: 最初の control command が届くまで機体を spawn 姿勢で固定します。hover・編隊・バッチ実行など自動実行で、接続待ちの間に姿勢が乱れないきれいな初期条件を保証します。床置きスタートのプリセットは各自の JSON で `false` を設定します。実行ごとの上書きは `simulate --hold-until-first-command` / `--no-hold-until-first-command`。`lockstep` pacing では command 受信でしか物理が進まないため無関係です。
+- 起動時フリーズ `simulation.hold_until_first_command`（既定 config では `true`）: 最初の control command が届くまで機体を spawn 時の状態（姿勢と初速度）で固定します。hover・編隊・バッチ実行など自動実行で、接続待ちの間に姿勢が乱れないきれいな初期条件を保証します。床置きスタートのプリセットは各自の JSON で `false` を設定します。実行ごとの上書きは `simulate --hold-until-first-command` / `--no-hold-until-first-command`。`lockstep` pacing では command 受信でしか物理が進まないため無関係です。
 - アーム長（または `actuation.rotors` による各ロータ幾何の明示指定：位置・推力軸・回転方向・反トルク比）
 - 反トルク係数
 - 最大ロータ推力
 - ロータ推力換算係数 `thrust_coefficient`
 - 機体初期位置
 - スポーン姿勢ポリシー `drone.initial_spawn`: `mode` は `"surface"`（既定；地形に接地静定）、`"wall_contact"`（床＋壁スタート。`wall_clearance_m` 離隔（既定 5 mm）と任意の `b2_body`/`b3_body` 初期姿勢付き）、`"explicit"`（`positions_xy` で複数機を任意座標に配置；`center_x` で壁法線方向オフセットを上書き）
+- スポーン時の向きと初速度 `drone.initial_spawn`（いずれも全機共通の数値か、1 機 1 値のリスト。既定は 0）: `yaw_deg` は surface と explicit のスポーンを世界 z 軸まわりに回します（+x から反時計回り。車輪は回した向きで地形に接地させます。wall_contact の姿勢は `b2_body`/`b3_body` で与えます）。`forward_speed` [m/s] を与えると転がりながら始まります。車軸の中点は「車軸 × 接触法線」の向き（接触法線はスポーン点の地形の法線、wall_contact では壁の法線）に動くので、離隔は変わらず横滑りもしません。車輪は滑らずに転がる回転数で回します。`turn_rate` [rad/s] は同じ法線まわりのヨーレートです。`hold_until_first_command` で保持しているあいだも初速度は保たれ、最初の指令が届いた時点でその速さで走り出します。`lockstep` では最初に送る状態にすでに初速度が入っています
 - 機体ボディと車輪の主要寸法・質量；`drone.inertial_reference` は `"body_only"`（`drone.mass`/`drone.inertia` は中央ボディのみで車輪分は加算）または `"total_vehicle"`（全機体を表し、MuJoCo ボディ構築時に車輪の解析寄与を減算）。必ず指定してください：キーが無いと `"body_only"` とみなし、Python 側（`InertialReferenceWarning`）と `uavsim.Params`（`uavsim:Params:inertialReferenceUnset`）が警告します（機体全体の実測値を `"body_only"` で読むと車輪の質量を二重に数えるため）。`drone.wheels.offset_z`（既定 0）は車軸の高さ（機体 z 方向、機体原点から）。`"total_vehicle"` では原点は機体全体の重心のまま（中央ボディ自身の重心が逆側へずれる）なので、正の値で「重心より上にある車軸」（電池を車軸の下に吊るした機体など）を表す。初期位置は原点ではなく車軸を置く
 - 床、壁、機体、車輪の接触設定（`solref`、任意で `solimp` と `condim`）。キーの綴りは要素ごとに異なります：車輪はネスト（`drone.wheels.solimp`/`condim`）、surface もネスト（`environment.surface.solimp`/`condim`）、壁はフラット接頭辞（`environment.wall_solimp`, `environment.wall_condim`）
 - `environment.surface` による平面または関数ベース曲面の指定

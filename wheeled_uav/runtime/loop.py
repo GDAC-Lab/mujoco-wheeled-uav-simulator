@@ -108,8 +108,8 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     session_timing = SessionTimingTracker.start(scene.data.time, timing=runtime.timing_config)
     timer_context = high_resolution_os_timer if use_realtime_pacing else nullcontext
 
-    # Optionally freeze the vehicles at their spawn pose until the first
-    # control command arrives. Without this, an unactuated two-wheeled drone
+    # Optionally freeze the vehicles at their spawn state (pose and initial
+    # velocity) until the first control command arrives. Without this, an unactuated two-wheeled drone
     # tips over about its axle during the controller connection window and the
     # controller then starts from an unrecoverable attitude.
     #
@@ -124,6 +124,7 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     else:
         hold_until_first_command = bool(scene.params.get("simulation", {}).get("hold_until_first_command", False))
     initial_qpos = scene.data.qpos.copy()
+    initial_qvel = scene.data.qvel.copy()
 
     try:
         with timer_context():
@@ -136,12 +137,13 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 runtime.step_physics_once()
                 if holding:
                     # Re-freeze AFTER the step so the published state is
-                    # exactly the spawn pose; a pre-step reset would leave one
-                    # integration step of gravity in the published velocity.
-                    # data.time keeps advancing so --duration-seconds still
-                    # bounds controller-less runs.
+                    # exactly the spawn state (pose and initial velocity); a
+                    # pre-step reset would leave one integration step of
+                    # gravity in the published velocity. data.time keeps
+                    # advancing so --duration-seconds still bounds
+                    # controller-less runs.
                     scene.data.qpos[:] = initial_qpos
-                    scene.data.qvel[:] = 0.0
+                    scene.data.qvel[:] = initial_qvel
                     mujoco.mj_forward(scene.model, scene.data)
                 step_count += 1
                 if step_count % publish_every == 0:

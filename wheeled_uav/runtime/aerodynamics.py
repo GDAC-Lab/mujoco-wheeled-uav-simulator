@@ -6,20 +6,10 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from ..model.poses import rotation_from_euler_xyz_degrees
 from ..types import AerodynamicsConfig, SensorLayout, UAVModelSpec
 
 __all__ = ["AerodynamicsModel"]
-
-
-def _rotation_from_euler_xyz_degrees(euler_degrees: list[float]) -> np.ndarray:
-    roll, pitch, yaw = (math.radians(float(angle)) for angle in euler_degrees)
-    cr, sr = math.cos(roll), math.sin(roll)
-    cp, sp = math.cos(pitch), math.sin(pitch)
-    cy, sy = math.cos(yaw), math.sin(yaw)
-    rotation_x = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
-    rotation_y = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]])
-    rotation_z = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]])
-    return rotation_x @ rotation_y @ rotation_z
 
 
 class AerodynamicsModel:
@@ -68,7 +58,7 @@ class AerodynamicsModel:
         wall_size = environment.get("wall_size")
         self._wall_available = wall_position is not None and wall_size is not None
         if self._wall_available:
-            wall_rotation = _rotation_from_euler_xyz_degrees(environment.get("wall_euler", [0.0, 0.0, 0.0]))
+            wall_rotation = rotation_from_euler_xyz_degrees(environment.get("wall_euler", [0.0, 0.0, 0.0]))
             # The working face is the -x face of the wall box in the wall frame.
             self._wall_normal = wall_rotation @ np.array([-1.0, 0.0, 0.0])
             self._wall_face_point = np.array(wall_position, dtype=float) + wall_rotation @ np.array(

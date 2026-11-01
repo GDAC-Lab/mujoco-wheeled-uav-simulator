@@ -64,7 +64,7 @@ External controller
 | `simulation.state_publish_every_n_steps` | UDP decimation factor | `5` → 200 Hz at 1 kHz physics |
 | `simulation.viewer_fps` | `viewer.sync()` rate cap (interactive runs) | `60` |
 | `simulation.pacing_mode` | Wall-clock pacing | `realtime` (HIL/interactive), `accelerated` (fast batch), or `lockstep` (deterministic co-simulation) |
-| `simulation.hold_until_first_command` | Freeze vehicles at the spawn pose until the first control command is applied (reproducible initial condition for scripted runs) | `true` in the bundled config; set to `false` by presets that start resting on the ground; no effect in `lockstep` |
+| `simulation.hold_until_first_command` | Freeze vehicles at the spawn state (pose and initial velocity) until the first control command is applied (reproducible initial condition for scripted runs) | `true` in the bundled config; set to `false` by presets that start resting on the ground; no effect in `lockstep` |
 
 CLI overrides: `simulate --pacing-mode accelerated`, `simulate --no-hold-until-first-command`
 

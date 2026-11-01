@@ -8,6 +8,7 @@ __all__ = [
     "AerodynamicsConfig",
     "FidelityConfig",
     "InitialPoseSpec",
+    "InitialVelocitySpec",
     "LoggingConfig",
     "NetworkFidelityConfig",
     "RotorSpec",
@@ -97,9 +98,26 @@ class AerodynamicsConfig:
 
 
 @dataclass(frozen=True)
+class InitialVelocitySpec:
+    """Spawn velocity of one vehicle.
+
+    ``linear`` is the velocity of the body frame origin and ``angular`` the
+    angular velocity, both in world coordinates. The wheel rates are the hinge
+    joint velocities [rad/s] about the body y axis, relative to the body.
+    """
+
+    linear: tuple[float, float, float]
+    angular: tuple[float, float, float]
+    left_wheel_rate: float = 0.0
+    right_wheel_rate: float = 0.0
+
+
+@dataclass(frozen=True)
 class InitialPoseSpec:
     position: list[float]
     quaternion: tuple[float, float, float, float] | None = None
+    # None: the vehicle starts at rest.
+    velocity: InitialVelocitySpec | None = None
 
 
 @dataclass(frozen=True)
@@ -152,3 +170,5 @@ class UAVModelSpec:
     actuator_names: tuple[str, str, str, str]
     sensor_names: SensorNames
     contact_prefix: str
+    # Set from the spawn configuration; None: the vehicle starts at rest.
+    initial_velocity: InitialVelocitySpec | None = None

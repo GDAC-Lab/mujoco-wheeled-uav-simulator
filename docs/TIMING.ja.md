@@ -64,7 +64,7 @@
 | `simulation.state_publish_every_n_steps` | UDP 間引き | `5` → 1 kHz 物理で 200 Hz |
 | `simulation.viewer_fps` | ビューア `sync()` 上限 | `60` |
 | `simulation.pacing_mode` | 実時間ペーシング | `realtime`（HIL/対話）、`accelerated`（加速）、`lockstep`（決定論的コシミュレーション） |
-| `simulation.hold_until_first_command` | 最初のコマンド適用までスポーン姿勢で固定（自動実行の再現性確保） | 同梱 config は `true`、床置きスタートのプリセットは各自の JSON で `false` を設定、`lockstep` では無関係 |
+| `simulation.hold_until_first_command` | 最初のコマンド適用までスポーン時の状態（姿勢と初速度）で固定（自動実行の再現性確保） | 同梱 config は `true`、床置きスタートのプリセットは各自の JSON で `false` を設定、`lockstep` では無関係 |
 
 CLI 上書き: `simulate --pacing-mode accelerated`、`simulate --no-hold-until-first-command`
 

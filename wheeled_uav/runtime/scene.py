@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import mujoco
+import numpy as np
 
 from ..config import build_fidelity_config, load_vehicle_params
 from ..model.builder import render_model_xml
@@ -22,6 +23,7 @@ __all__ = [
     "RenderedModelArtifacts",
     "SimulationRequest",
     "SimulationScene",
+    "apply_initial_velocities",
     "build_sensor_layout",
     "build_sensor_layouts",
     "load_simulation_scene",
@@ -109,6 +111,32 @@ def build_sensor_layouts(model: mujoco.MjModel, uav_specs: list[UAVModelSpec]) -
     return [build_sensor_layout(model, uav_spec.sensor_names) for uav_spec in uav_specs]
 
 
+def apply_initial_velocities(model: mujoco.MjModel, data: mujoco.MjData, uav_specs: list[UAVModelSpec]) -> None:
+    """Write each vehicle's spawn velocity into ``data.qvel``.
+
+    Call on freshly created data (qpos at the spawn pose), before mj_forward.
+    """
+    for uav_spec in uav_specs:
+        velocity = uav_spec.initial_velocity
+        if velocity is None:
+            continue
+        joint_id = int(model.body_jntadr[model.body(uav_spec.body_name).id])
+        if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+            raise ValueError(f"UAV body {uav_spec.body_name!r} has no free joint to carry its initial velocity")
+        qpos_address = int(model.jnt_qposadr[joint_id])
+        dof_address = int(model.jnt_dofadr[joint_id])
+        rotation = np.zeros(9)
+        mujoco.mju_quat2Mat(rotation, data.qpos[qpos_address + 3 : qpos_address + 7])
+        # A free joint takes its linear velocity in world coordinates and its
+        # angular velocity in body coordinates.
+        data.qvel[dof_address : dof_address + 3] = velocity.linear
+        data.qvel[dof_address + 3 : dof_address + 6] = rotation.reshape(3, 3).T @ np.asarray(velocity.angular)
+        for joint_suffix, wheel_rate in (("lw", velocity.left_wheel_rate), ("rw", velocity.right_wheel_rate)):
+            wheel_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{uav_spec.contact_prefix}joint_{joint_suffix}")
+            if wheel_joint_id >= 0:
+                data.qvel[int(model.jnt_dofadr[wheel_joint_id])] = wheel_rate
+
+
 def render_simulation_model(
     request: SimulationRequest,
     *,
@@ -145,6 +173,7 @@ def load_simulation_scene(
         fidelity = replace(fidelity, mode=request.fidelity_mode)  # type: ignore[arg-type]
     model = mujoco.MjModel.from_xml_path(str(rendered_model.model_xml_path))
     data = mujoco.MjData(model)
+    apply_initial_velocities(model, data, rendered_model.uav_specs)
     mujoco.mj_forward(model, data)
     return SimulationScene(
         request=request,

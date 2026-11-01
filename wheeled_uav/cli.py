@@ -88,7 +88,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Freeze the vehicles at their spawn pose until the first control command arrives "
+            "Freeze the vehicles at their spawn state (pose and initial velocity) until the first control command arrives "
             "(recommended for automatic/scripted runs; presets that start resting on the ground "
             "disable it in their JSON instead). Overrides simulation.hold_until_first_command in the params file; "
             "the default vehicle_params.json enables it. No effect in lockstep pacing, where "

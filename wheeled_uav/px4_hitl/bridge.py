@@ -4,8 +4,8 @@ Loop shape (run_bridge):
     receive HIL_ACTUATOR_CONTROLS -> map to rotor thrusts -> step physics
     -> extract sensors -> send HIL_SENSOR (+ HIL_GPS or ODOMETRY) -> pace.
 
-The plant stays frozen at the spawn pose until the first controls message is
-applied (same rationale as the UDP loop: a wheeled drone tips over during the
+The plant stays frozen at its spawn state (pose and initial velocity) until the
+first controls message is applied (same rationale as the UDP loop: a wheeled drone tips over during the
 connection window otherwise).
 """
 
@@ -289,6 +289,7 @@ def run_bridge(
         timestep = float(model.opt.timestep)
         duration = request.duration_seconds
         initial_qpos = data.qpos.copy()
+        initial_qvel = data.qvel.copy()
         next_gps_time = 0.0
         next_odom_time = 0.0
         next_status_wall = time.monotonic() + config.status_period_s
@@ -323,9 +324,9 @@ def run_bridge(
                 aerodynamics_model.apply(data)
                 mujoco.mj_step(model, data)
                 if not fresh and stats.controls_applied_steps == 0:
-                    # 最初の指令が届くまでスポーン姿勢で保持（UDP ループと同じ方針）
+                    # 最初の指令が届くまでスポーン時の状態（姿勢と初速度）で保持（UDP ループと同じ方針）
                     data.qpos[:] = initial_qpos
-                    data.qvel[:] = 0.0
+                    data.qvel[:] = initial_qvel
                     mujoco.mj_forward(model, data)
                     extractor.reset()
                 stats.steps += 1
