@@ -112,10 +112,17 @@ class TimingModuleTests(unittest.TestCase):
             viewer_fps=60.0,
             pacing_mode="realtime",
         )
+        started = time.perf_counter()
         session = SessionTimingTracker.start(0.0, timing=timing)
         time.sleep(0.05)
         snapshot = session.snapshot(0.05, 1.0)
-        self.assertLess(abs(snapshot["sim_wall_skew_seconds"]), 0.02)
+        elapsed = time.perf_counter() - started
+        # A sleep can overrun (by a whole 15.6 ms tick on Windows, more under
+        # load): check the skew against the wall time that actually passed.
+        self.assertLessEqual(snapshot["session_wall_elapsed_seconds"], elapsed)
+        self.assertGreater(snapshot["session_wall_elapsed_seconds"], elapsed - 0.002)
+        self.assertAlmostEqual(snapshot["sim_wall_skew_seconds"], 0.05 - snapshot["session_wall_elapsed_seconds"])
+        self.assertLess(abs(snapshot["sim_wall_skew_seconds"]), 0.05)
 
 
 if __name__ == "__main__":

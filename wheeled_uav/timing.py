@@ -172,7 +172,11 @@ class RealtimeTracker:
 
 @dataclass
 class SessionTimingTracker:
-    """Tracks sim-time vs wall-clock skew embedded in every published state packet."""
+    """Tracks sim-time vs wall-clock skew embedded in every published state packet.
+
+    The wall clock is time.perf_counter(): on Windows before Python 3.13,
+    time.monotonic() advances in steps of the 15.6 ms system tick.
+    """
 
     wall_origin_monotonic: float
     sim_origin: float
@@ -204,7 +208,7 @@ class SessionTimingTracker:
         if timing is not None:
             resolved_pacing_mode = timing.pacing_mode
         return cls(
-            wall_origin_monotonic=time.monotonic(),
+            wall_origin_monotonic=time.perf_counter(),
             sim_origin=float(sim_time),
             control_period_seconds=resolved_control_period,
             publish_every_n_steps=resolved_publish_every,
@@ -212,7 +216,7 @@ class SessionTimingTracker:
         )
 
     def snapshot(self, sim_time: float, realtime_factor: float) -> dict[str, float | str]:
-        wall_elapsed = time.monotonic() - self.wall_origin_monotonic
+        wall_elapsed = time.perf_counter() - self.wall_origin_monotonic
         sim_elapsed = float(sim_time) - self.sim_origin
         return {
             "physics_timestep_seconds": self.control_period_seconds / float(self.publish_every_n_steps),
