@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from ..config import get_configured_drone_mass, get_inertial_reference
+from ..config import get_configured_drone_mass, get_inertial_reference, get_wheels_config
 from ..paths import DEFAULT_PATH_RESOLVER, PathResolver
 from ..types import InitialPoseSpec, RotorSpec, SensorNames, SurfaceEvaluator, UAVModelSpec
 from .poses import build_initial_poses, build_surface_model_spec
@@ -172,7 +172,8 @@ def _build_rotor_site_lines(
     ]
 
 
-def _build_wheel_body_block(drone: dict[str, Any], prefix: str, side_name: str, wheel_offset_y: float) -> list[str]:
+def _build_wheel_body_block(drone: dict[str, Any], prefix: str, side_name: str) -> list[str]:
+    wheel_offset_y = float(drone["wheels"]["offset_y"])
     wheel_direction = -1.0 if side_name == "right" else 1.0
     wheel_body_name = f"{prefix}{side_name}_wheel"
     wheel_joint_name = f"{prefix}joint_{'rw' if side_name == 'right' else 'lw'}"
@@ -197,13 +198,16 @@ def wheel_offset_z(drone: dict[str, Any]) -> float:
     # inertial_reference "total_vehicle" the origin is the whole-vehicle COM, so a positive
     # value puts the axle above the COM (e.g. a battery hung below the axle). Default 0:
     # the axle passes through the origin, as in every model before this key existed.
-    return float(drone["wheels"].get("offset_z", 0.0))
+    wheels = get_wheels_config(drone)
+    return 0.0 if wheels is None else float(wheels.get("offset_z", 0.0))
 
 
 def _wheel_pair_inertia_contribution(drone: dict[str, Any]) -> tuple[float, tuple[float, float, float]]:
     # Both wheels modeled as solid cylinders (axis along body y) at (0, +/-offset_y, offset_z)
     # from the body frame origin; the inertia returned is about that origin.
-    wheels = drone["wheels"]
+    wheels = get_wheels_config(drone)
+    if wheels is None:
+        return 0.0, (0.0, 0.0, 0.0)
     wheel_mass = float(wheels["mass"])
     radius = float(wheels["radius"])
     full_height = 2.0 * float(wheels["thickness"])
@@ -346,7 +350,7 @@ def _build_drone_body_block(params: dict[str, Any], rotor_specs: list[RotorSpec]
     drone_diaginertia = _get_drone_diaginertia(drone)
     propeller_radius = float(drone["propeller"]["radius"])
     propeller_thickness = float(drone["propeller"]["thickness"])
-    wheel_offset_y = float(drone["wheels"]["offset_y"])
+    has_wheels = get_wheels_config(drone) is not None
 
     body_blocks: list[str] = []
     for uav_index, (uav_spec, initial_pose) in enumerate(zip(uav_specs, initial_poses, strict=True)):
@@ -371,8 +375,8 @@ def _build_drone_body_block(params: dict[str, Any], rotor_specs: list[RotorSpec]
                     *rotor_site_lines,
                     *mesh_geom_lines,
                     f'      <geom name="{prefix}drone_body_box" type="box" size="{format_vector(drone["body_box"]["size"])}" euler="{format_vector(drone["body_box"]["euler"])}" mass="0" group="{format_scalar(drone["body_box"]["contact"]["group"])}" rgba="{format_vector(body_box_rgba)}" contype="{format_scalar(drone["body_box"]["contact"]["contype"])}" conaffinity="{format_scalar(drone["body_box"]["contact"]["conaffinity"])}"/>',
-                    *_build_wheel_body_block(drone, prefix, "right", wheel_offset_y),
-                    *_build_wheel_body_block(drone, prefix, "left", wheel_offset_y),
+                    *(_build_wheel_body_block(drone, prefix, "right") if has_wheels else []),
+                    *(_build_wheel_body_block(drone, prefix, "left") if has_wheels else []),
                     '    </body>',
                 ]
             )

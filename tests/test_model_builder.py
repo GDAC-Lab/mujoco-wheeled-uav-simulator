@@ -362,3 +362,83 @@ def test_wall_contact_spawn_places_the_axle_not_the_origin():
     # The axle keeps the wall clearance and height of the default model; only the origin moves.
     assert np.allclose(axle, base.position, atol=1e-12)
     assert abs(axle[0] - _resolve_wall_contact_center_x(environment, drone)) < 1e-12
+
+
+def _wheelless_params(drop_block: bool):
+    params = load_vehicle_params()
+    drone = params["drone"]
+    if drop_block:
+        drone.pop("wheels")
+    else:
+        drone["wheels"]["enabled"] = False
+    drone["mass"] = 0.8
+    drone["inertia"] = [0.004, 0.005, 0.008]
+    drone.pop("inertial_reference", None)
+    return params
+
+
+def test_vehicle_without_wheels_builds_with_the_configured_mass_and_inertia(tmp_path):
+    import warnings
+
+    import mujoco
+    import numpy as np
+
+    from wheeled_uav.config import InertialReferenceWarning, parse_total_mass
+    from wheeled_uav.model.builder import render_model_xml
+
+    for drop_block in (True, False):
+        params = _wheelless_params(drop_block)
+        with warnings.catch_warnings():
+            # No wheel mass can be counted twice, so a missing inertial_reference is fine.
+            warnings.simplefilter("error", InertialReferenceWarning)
+            xml_path, _, uav_specs = render_model_xml(params, output_path=tmp_path / f"wheelless_{drop_block}.xml")
+            assert parse_total_mass(params) == 0.8
+        model = mujoco.MjModel.from_xml_path(str(xml_path))
+        root = model.body(uav_specs[0].body_name).id
+        assert model.njnt == 1  # the free joint only
+        assert abs(model.body_subtreemass[root] - 0.8) < 1e-12
+        np.testing.assert_allclose(model.body_inertia[root], [0.004, 0.005, 0.008])
+        assert all("wheel" not in model.geom(geom_id).name for geom_id in range(model.ngeom))
+
+
+def test_vehicle_without_wheels_spawns_on_the_terrain_and_rejects_a_wheel_based_wall_spawn():
+    import math
+
+    import pytest
+
+    from wheeled_uav.model.poses import build_initial_poses, build_surface_model_spec
+    from wheeled_uav.model.surface import evaluate_height_function
+
+    drone = {"initial_position": [0.0, 0.0, 0.05], "initial_spawn": {"mode": "explicit", "positions_xy": [[0.3, 0.1]], "yaw_deg": 90.0}}
+    terrain = build_surface_model_spec(
+        {
+            "surface": {
+                "mode": "slope",
+                "solref": [0.01, 1.0],
+                "contact": {"contype": 1, "conaffinity": 1},
+                "height_function": {
+                    "x_range": [-1.0, 1.0],
+                    "y_range": [-1.0, 1.0],
+                    "grid_resolution": [11, 11],
+                    "parameters": {"z_offset": 0.0, "slope_x": 0.3, "slope_y": 0.0},
+                },
+            }
+        }
+    )
+
+    (pose,) = build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0)
+
+    assert math.isclose(pose.position[2], evaluate_height_function(terrain.evaluator, 0.3, 0.1) + 0.05)
+    # Facing +y on a slope rising along +x: the axle (body y, pointing -x) tilts down, so the roll is -atan(0.3).
+    w, x, y, z = pose.quaternion
+    body_z = [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]
+    normal = [-0.3 / math.hypot(0.3, 1.0), 0.0, 1.0 / math.hypot(0.3, 1.0)]
+    assert all(math.isclose(a, b, abs_tol=1e-12) for a, b in zip(body_z, normal))
+
+    wall = {"wall_position": [2.0, 0.0, 1.0], "wall_size": [0.05, 3.0, 1.0]}
+    drone["initial_spawn"] = {"mode": "wall_contact"}
+    with pytest.raises(ValueError, match="needs wheels"):
+        build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0, environment=wall)
+    drone["initial_spawn"]["center_x"] = 1.8
+    (wall_pose,) = build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0, environment=wall)
+    assert wall_pose.position[0] == 1.8

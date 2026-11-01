@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config import get_wheels_config
 from ..types import InitialPoseSpec, InitialVelocitySpec, SurfaceEvaluator, SurfaceModelSpec
 from .surface import (
     build_surface_blocks,
@@ -155,7 +156,8 @@ def _get_initial_wheel_contact_clearance(surface_config: dict[str, Any], drone: 
 
 
 def _wheel_offset_z(drone: dict[str, Any]) -> float:
-    return float(drone["wheels"].get("offset_z", 0.0))
+    wheels = get_wheels_config(drone)
+    return 0.0 if wheels is None else float(wheels.get("offset_z", 0.0))
 
 
 def _get_initial_pitch_angle(
@@ -288,8 +290,10 @@ def _resolve_wall_contact_center_x(environment: dict[str, Any], drone: dict[str,
     wall_position = environment["wall_position"]
     wall_size = environment["wall_size"]
     wall_face_x = float(wall_position[0]) - float(wall_size[0])
-    wheel_radius = float(drone["wheels"]["radius"])
-    return wall_face_x - wheel_radius - wall_clearance
+    wheels = get_wheels_config(drone)
+    if wheels is None:
+        raise ValueError('drone.initial_spawn.mode="wall_contact" needs wheels or an explicit initial_spawn.center_x')
+    return wall_face_x - float(wheels["radius"]) - wall_clearance
 
 
 def get_wall_contact_initial_pose(
@@ -353,7 +357,18 @@ def get_drone_initial_pose(
 
     heading = _DEFAULT_HEADING if yaw == 0.0 else (math.cos(yaw), math.sin(yaw))
     axle = _DEFAULT_AXLE if yaw == 0.0 else (-math.sin(yaw), math.cos(yaw))
-    wheel_config = drone["wheels"]
+    wheel_config = get_wheels_config(drone)
+    if wheel_config is None:
+        # Without wheels the body origin rests initial_position.z above the
+        # terrain, with the body tilted to the terrain slopes.
+        dh_dx, dh_dy = evaluate_height_gradient(surface_evaluator, resolved_x_coord, resolved_y_coord)
+        roll_angle = math.atan(dh_dx * axle[0] + dh_dy * axle[1])
+        pitch_angle = _get_initial_pitch_angle(surface_evaluator, resolved_x_coord, resolved_y_coord, heading)
+        initial_position[2] += evaluate_height_function(surface_evaluator, resolved_x_coord, resolved_y_coord)
+        quaternion = _compose_roll_pitch_quaternion(roll_angle, pitch_angle)
+        if yaw != 0.0:
+            quaternion = _multiply_quaternions(_yaw_quaternion(yaw), quaternion)
+        return InitialPoseSpec(position=initial_position, quaternion=quaternion)
     wheel_offset_y = float(wheel_config["offset_y"])
     wheel_radius = float(wheel_config["radius"])
     roll_angle = _solve_initial_roll_angle(surface_evaluator, resolved_x_coord, resolved_y_coord, wheel_offset_y, wheel_radius, axle)
@@ -437,24 +452,27 @@ def build_rolling_velocity(
         raise ValueError("cannot spawn rolling: the wheel axle is parallel to the contact normal")
     rolling /= rolling_norm
 
-    wheels = drone["wheels"]
-    wheel_offset_y = float(wheels["offset_y"])
-    wheel_radius = float(wheels["radius"])
     angular_velocity = turn_rate * normal
     # The axle midpoint sits offset_z above the body origin along body z.
     axle_midpoint_offset = _wheel_offset_z(drone) * up_axis
     origin_velocity = forward_speed * rolling - np.cross(angular_velocity, axle_midpoint_offset)
+    linear = tuple(float(value) for value in origin_velocity)
+    angular = tuple(float(value) for value in angular_velocity)
+    wheels = get_wheels_config(drone)
+    if wheels is None:
+        return InitialVelocitySpec(linear=linear, angular=angular)
     # The wheel centres at +-offset_y along the axle move at
     # forward_speed -+ turn_rate * offset_y * |axle x normal| along `rolling`.
     # A wheel touches the plane at the lowest point of its rim, which leaves
     # the normal through the centre when the axle is tilted to the plane;
     # keeping that point at rest takes the spin
     # (centre speed) / radius - turn_rate * (axle . normal).
-    lateral = turn_rate * wheel_offset_y * rolling_norm
+    wheel_radius = float(wheels["radius"])
+    lateral = turn_rate * float(wheels["offset_y"]) * rolling_norm
     tilt_spin = turn_rate * float(axle_axis @ normal)
     return InitialVelocitySpec(
-        linear=tuple(float(value) for value in origin_velocity),
-        angular=tuple(float(value) for value in angular_velocity),
+        linear=linear,
+        angular=angular,
         left_wheel_rate=(forward_speed - lateral) / wheel_radius - tilt_spin,
         right_wheel_rate=(forward_speed + lateral) / wheel_radius - tilt_spin,
     )

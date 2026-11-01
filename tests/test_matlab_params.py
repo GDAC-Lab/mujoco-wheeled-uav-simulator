@@ -123,3 +123,24 @@ def test_matlab_reports_a_missing_calibration_file(tmp_path):
     params_path.write_text(json.dumps(params), encoding="utf-8")
 
     assert _load_in_octave(params_path) == {"error": "uavsim:Params:calibrationNotFound"}
+
+
+def test_matlab_total_mass_without_wheels_matches_python(tmp_path):
+    params_path = _write_case(tmp_path, None)
+    params = json.loads(params_path.read_text(encoding="utf-8"))
+    params["drone"]["wheels"]["enabled"] = False
+    params["drone"]["mass"] = 0.8
+    params["drone"].pop("inertial_reference", None)
+    params_path.write_text(json.dumps(params), encoding="utf-8")
+    script = (
+        f"addpath('{REPOSITORY_ROOT / 'matlab'}');"
+        f" p = uavsim.Params.load('{params_path.parent}', 'params_path', '{params_path}');"
+        " printf('%s\\n', jsonencode(struct('mass', p.mass, 'friction_is_nan', isnan(p.wheel_friction))));"
+    )
+    result = subprocess.run(
+        [OCTAVE, "--no-gui", "--quiet", "--eval", script], capture_output=True, text=True, timeout=120, check=True
+    )
+    matlab = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert matlab["mass"] == pytest.approx(_load_in_python(params_path)["drone"]["mass"], rel=_REL)
+    assert matlab["friction_is_nan"] is True

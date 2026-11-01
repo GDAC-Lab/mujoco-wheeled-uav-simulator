@@ -27,7 +27,7 @@ classdef Params
                 'yaw_moment_ratio', double(raw_params.actuation.yaw_moment_ratio), ...
                 'max_rotor_thrust', double(raw_params.actuation.max_rotor_thrust), ...
                 'thrust_coefficient', double(raw_params.actuation.thrust_coefficient), ...
-                'wheel_friction', double(raw_params.drone.wheels.friction(1)), ...
+                'wheel_friction', uavsim.Params.parse_wheel_friction(raw_params), ...
                 'command_mode', char(raw_params.actuation.command_mode), ...
                 'controller', uavsim.Params.parse_controller_params(raw_params), ...
                 'raw', raw_params, ...   % controller-specific blocks are parsed by the controllers themselves
@@ -49,11 +49,18 @@ classdef Params
             else
                 body_mass = double(drone.body_box.mass);
             end
+            wheels = uavsim.Params.wheels_block(drone);
+            if isempty(wheels)
+                wheel_mass = 0.0;
+            else
+                wheel_mass = double(wheels.mass);
+            end
             if isfield(drone, 'inertial_reference')
                 reference = lower(strtrim(char(drone.inertial_reference)));
+            elseif isempty(wheels)
+                reference = 'body_only';   % no wheel mass that could be counted twice
             else
                 reference = 'body_only';
-                wheel_mass = double(drone.wheels.mass);
                 warning('uavsim:Params:inertialReferenceUnset', ...
                     ['drone.inertial_reference is not set; assuming "body_only": the model gets ' ...
                      'drone.mass %g kg plus two wheels of %g kg = %g kg in total. If drone.mass ' ...
@@ -65,10 +72,30 @@ classdef Params
                 case 'total_vehicle'
                     total_mass = body_mass;
                 case 'body_only'
-                    total_mass = body_mass + 2.0 * double(drone.wheels.mass);
+                    total_mass = body_mass + 2.0 * wheel_mass;
                 otherwise
                     error('uavsim:Params:badInertialReference', ...
                         'drone.inertial_reference must be "body_only" or "total_vehicle" (got "%s").', reference);
+            end
+        end
+
+        function wheels = wheels_block(drone)
+            % drone.wheels, or [] for a vehicle without wheels (block missing or
+            % "enabled": false), as get_wheels_config() on the Python side.
+            wheels = [];
+            if isfield(drone, 'wheels') && isstruct(drone.wheels) ...
+                    && ~(isfield(drone.wheels, 'enabled') && ~logical(drone.wheels.enabled))
+                wheels = drone.wheels;
+            end
+        end
+
+        function friction = parse_wheel_friction(raw_params)
+            % Sliding friction coefficient of the wheels; NaN without wheels.
+            wheels = uavsim.Params.wheels_block(raw_params.drone);
+            if isempty(wheels)
+                friction = NaN;
+            else
+                friction = double(wheels.friction(1));
             end
         end
 

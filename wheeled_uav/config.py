@@ -26,6 +26,8 @@ __all__ = [
     "clear_vehicle_params_cache",
     "get_configured_drone_mass",
     "get_inertial_reference",
+    "get_wheel_pair_mass",
+    "get_wheels_config",
     "load_vehicle_params",
     "parse_total_mass",
 ]
@@ -45,6 +47,23 @@ def get_configured_drone_mass(drone_params: dict[str, Any]) -> float:
     return float(drone_params["body_box"]["mass"])
 
 
+def get_wheels_config(drone_params: dict[str, Any]) -> dict[str, Any] | None:
+    """The drone.wheels block, or None for a vehicle without wheels.
+
+    A vehicle has no wheels when drone.wheels is missing or sets
+    "enabled": false (for example a plain multicopter).
+    """
+    wheels = drone_params.get("wheels")
+    if not isinstance(wheels, dict) or not bool(wheels.get("enabled", True)):
+        return None
+    return wheels
+
+
+def get_wheel_pair_mass(drone_params: dict[str, Any]) -> float:
+    wheels = get_wheels_config(drone_params)
+    return 0.0 if wheels is None else 2.0 * float(wheels["mass"])
+
+
 def get_inertial_reference(drone_params: dict[str, Any]) -> str:
     # "body_only": drone.mass / drone.inertia describe the central body and the two
     # wheels are added on top. "total_vehicle": they describe the whole vehicle and
@@ -54,6 +73,8 @@ def get_inertial_reference(drone_params: dict[str, Any]) -> str:
     # silently counts the wheel mass twice.
     raw_value = drone_params.get("inertial_reference")
     if raw_value is None:
+        if get_wheels_config(drone_params) is None:
+            return "body_only"  # no wheel mass that could be counted twice
         body_mass = get_configured_drone_mass(drone_params)
         wheel_mass = float(drone_params["wheels"]["mass"])
         # stacklevel=1 attributes the warning to this line, so Python's default
@@ -84,7 +105,7 @@ def parse_total_mass(params: dict[str, Any]) -> float:
     body_or_total_mass = get_configured_drone_mass(drone_params)
     if inertial_reference == "total_vehicle":
         return body_or_total_mass
-    return body_or_total_mass + 2.0 * float(drone_params["wheels"]["mass"])
+    return body_or_total_mass + get_wheel_pair_mass(drone_params)
 
 
 @lru_cache(maxsize=8)
