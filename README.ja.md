@@ -503,7 +503,7 @@ MATLAB 側の `simulation_logger` が、以下を `.mat` に保存します。
 - `periodic`: 指定秒数ごとに上書き保存
 - `periodic_and_finalize`: 定期保存しつつ終了時にも保存
 
-`contact` には全接触のサマリに加えて、`left_wheel`、`right_wheel`、`surface`、`wall` の接触力サマリも入ります（壁面走行では `wall` グループの `total_normal_force` が押し付け力の実測値になります）。`contact.details` には各時刻の接触ごとの相手 geom 名、接触位置、貫入距離、接触座標系での力・トルク、法線力が入ります。曲面地形との接触では `surface_contact`、`surface_height`、`surface_normal` も保存されます。MuJoCo が各ステップで計算した接触力をそのまま保存しており、衝撃インパルスの後処理は行いません。
+`contact` には全接触のサマリに加えて、`left_wheel`、`right_wheel`、`surface`、`wall` の接触力サマリも入ります（壁面走行では `wall` グループの `total_normal_force` が押し付け力の実測値になります）。`contact.details` には各時刻の接触ごとの相手 geom 名、接触位置、貫入距離、接触座標系での力・トルク、法線力が入ります。曲面地形との接触では `surface_contact`、`surface_height`、`surface_normal` も保存されます。各機のサマリと詳細に入るのは、その機体の geom が関わる接触だけです（機体どうしの接触は両方の機体に入り、それ以外の物体どうしの接触、たとえば独自の XML テンプレートで足した物体の接触はどの機体にも入りません）。MuJoCo が各ステップで計算した接触力をそのまま保存しており、衝撃インパルスの後処理は行いません。
 
 </details>
 

@@ -7,12 +7,13 @@ import random
 import socket
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from ..protocol import build_packet_metadata
 from ..types import SensorLayout, UAVModelSpec
-from .contact import build_contact_report
+from .contact import build_contact_reports
 from .fidelity import ActuatorSnapshot, apply_sensor_fidelity
 from .scene import SimulationScene
 
@@ -35,9 +36,10 @@ def _build_uav_state(
     realtime_factor: float,
     sensor_rng: np.random.Generator | None,
     actuator_snapshot: ActuatorSnapshot | None,
+    contact_report: dict[str, Any],
     aero_entry: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    model, data, fidelity = scene.model, scene.data, scene.fidelity
+    data, fidelity = scene.data, scene.fidelity
     true_position = np.array(data.sensordata[sensor_layout.position], copy=True)
     true_linear_velocity = np.array(data.sensordata[sensor_layout.linear_velocity], copy=True)
     true_angular_velocity_world = np.array(data.sensordata[sensor_layout.angular_velocity], copy=True)
@@ -58,14 +60,6 @@ def _build_uav_state(
     )
     angular_velocity_body = rotation_matrix.T @ angular_velocity_world
     true_angular_velocity_body = true_rotation_matrix.T @ true_angular_velocity_world
-    contact_report = build_contact_report(
-        model,
-        data,
-        scene.surface_evaluator,
-        contact_prefix=uav_spec.contact_prefix,
-        geom_names=scene.geom_names,
-        include_details=fidelity.logging.include_contact_details,
-    )
 
     uav_state: dict[str, object] = {
         "name": uav_spec.name,
@@ -124,6 +118,15 @@ def build_state_payload(
     timing: dict[str, float] | None = None,
 ) -> bytes:
     """Serialize the scene state into a single-UAV or multi-UAV JSON packet."""
+    contact_reports = build_contact_reports(
+        scene.model,
+        scene.data,
+        scene.surface_evaluator,
+        scene.uav_specs,
+        geom_names=scene.geom_names,
+        include_details=scene.fidelity.logging.include_contact_details,
+        attribution=scene.contact_attribution,
+    )
     uav_states = [
         _build_uav_state(
             scene,
@@ -132,6 +135,7 @@ def build_state_payload(
             realtime_factor,
             sensor_rng,
             actuator_snapshot,
+            contact_reports[uav_index],
             aero_entry=None if aero_snapshot is None else aero_snapshot[uav_index],
         )
         for uav_index, (sensor_layout, uav_spec) in enumerate(zip(scene.sensor_layouts, scene.uav_specs, strict=True))

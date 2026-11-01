@@ -88,6 +88,7 @@ class _DummyScene:
         self.surface_evaluator = None
         self.uav_specs = uav_specs or []
         self.geom_names = ()
+        self.contact_attribution = None
 
 
 _EMPTY_CONTACT_REPORT = {
@@ -154,7 +155,7 @@ class StatePayloadTests(unittest.TestCase):
             applied_ctrl=np.array([3.5, 3.6, 3.7, 3.8]),
         )
 
-        with patch("wheeled_uav.runtime.state_publisher.build_contact_report", return_value=_EMPTY_CONTACT_REPORT):
+        with patch("wheeled_uav.runtime.state_publisher.build_contact_reports", return_value=[_EMPTY_CONTACT_REPORT]):
             payload = build_state_payload(
                 scene,
                 1.0,
@@ -183,7 +184,7 @@ class StatePayloadTests(unittest.TestCase):
             uav_specs=[uav_spec],
         )
 
-        with patch("wheeled_uav.runtime.state_publisher.build_contact_report", return_value=_EMPTY_CONTACT_REPORT):
+        with patch("wheeled_uav.runtime.state_publisher.build_contact_reports", return_value=[_EMPTY_CONTACT_REPORT]):
             payload = build_state_payload(
                 scene,
                 1.0,

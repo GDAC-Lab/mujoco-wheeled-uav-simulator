@@ -505,7 +505,7 @@ You can change the save mode by editing the `uavsim.RunOptions.build_logging_opt
 - `periodic`: overwrite-save at a fixed interval
 - `periodic_and_finalize`: periodic saves plus a final save on shutdown
 
-In addition to overall contact summaries, `contact` includes per-group summaries for `left_wheel`, `right_wheel`, `surface`, and `wall` (the wall group's `total_normal_force` is the measured pressing force in wall-riding runs). `contact.details` stores, for each time sample, the counterpart geom names, contact position, penetration distance, force and torque in the contact frame, and normal force. For curved-surface contact, `surface_contact`, `surface_height`, and `surface_normal` are also logged. The implementation records MuJoCo's per-step contact forces directly and does not perform any impulse post-processing.
+In addition to overall contact summaries, `contact` includes per-group summaries for `left_wheel`, `right_wheel`, `surface`, and `wall` (the wall group's `total_normal_force` is the measured pressing force in wall-riding runs). `contact.details` stores, for each time sample, the counterpart geom names, contact position, penetration distance, force and torque in the contact frame, and normal force. For curved-surface contact, `surface_contact`, `surface_height`, and `surface_normal` are also logged. Each vehicle's summaries and details cover only the contacts its own geoms take part in: a contact between two vehicles is reported for both, and a contact between other bodies (such as objects added through a custom XML template) for neither. The implementation records MuJoCo's per-step contact forces directly and does not perform any impulse post-processing.
 
 </details>
 

@@ -16,7 +16,7 @@ from ..paths import DEFAULT_PATH_RESOLVER, PathResolver
 from ..protocol import UDP_IP, get_instance_ports
 from ..timing import PacingMode, SimulationTimingConfig, parse_simulation_timing
 from ..types import FidelityConfig, SensorLayout, SensorNames, SurfaceEvaluator, UAVModelSpec
-from .contact import build_geom_name_lookup
+from .contact import ContactAttribution, build_contact_attribution, build_geom_name_lookup
 
 __all__ = [
     "RenderedModelArtifacts",
@@ -82,6 +82,9 @@ class SimulationScene:
     surface_evaluator: SurfaceEvaluator | None
     uav_specs: list[UAVModelSpec]
     geom_names: tuple[str, ...]
+    # Which UAV owns each geom; computed once so the per-packet contact
+    # reports need only a single pass over the contacts.
+    contact_attribution: ContactAttribution | None = None
 
 
 def _get_sensor_slice(model: mujoco.MjModel, sensor_name: str) -> slice:
@@ -154,6 +157,7 @@ def load_simulation_scene(
         surface_evaluator=rendered_model.surface_evaluator,
         uav_specs=rendered_model.uav_specs,
         geom_names=build_geom_name_lookup(model),
+        contact_attribution=build_contact_attribution(model, rendered_model.uav_specs),
     )
 
 
