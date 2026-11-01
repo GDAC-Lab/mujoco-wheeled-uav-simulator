@@ -189,6 +189,16 @@ class StatePayloadTests(unittest.TestCase):
         self.assertNotEqual(decoded["position"], decoded["sensor_truth"]["position"])
         self.assertIn("wall", decoded["contact_summary"])
 
+    def test_build_state_payload_reports_the_effective_fidelity_mode(self) -> None:
+        sensor_layout, uav_spec = _single_uav_layout()
+        scene = _DummyScene(FidelityConfig(mode="hil"), sensor_layouts=[sensor_layout], uav_specs=[uav_spec])
+        scene.request.fidelity_mode = None  # the mode came from the params file, not from --fidelity-mode
+
+        with patch("wheeled_uav.runtime.state_publisher.build_contact_reports", return_value=[_EMPTY_CONTACT_REPORT]):
+            payload = build_state_payload(scene, 1.0, sequence=1, wall_time_send_ns=0)
+
+        self.assertEqual(json.loads(payload.decode("utf-8"))["fidelity_mode"], "hil")
+
     def test_build_state_payload_omits_optional_fidelity_logs_by_default(self) -> None:
         sensor_layout, uav_spec = _single_uav_layout()
         scene = _DummyScene(

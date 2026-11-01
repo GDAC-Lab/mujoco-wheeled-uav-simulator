@@ -144,7 +144,7 @@ def build_state_payload(
         **build_packet_metadata(
             sequence=sequence,
             wall_time_send_ns=wall_time_send_ns,
-            fidelity_mode=scene.request.fidelity_mode,
+            fidelity_mode=scene.fidelity.mode,
         ),
         "sim_time": scene.data.time,
     }
