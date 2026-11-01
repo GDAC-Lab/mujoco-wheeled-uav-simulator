@@ -78,6 +78,19 @@ def test_lockstep_resends_the_unchanged_state_while_it_waits(tmp_path):
     assert states[-1]["sim_time"] >= 0.05 - 1e-9
 
 
+def test_lockstep_reports_its_own_timing(tmp_path):
+    states = [json.loads(datagram) for datagram in _run_lockstep(tmp_path, silent_seconds=0.2)]
+
+    assert states[0]["timing"]["command_wait_wall_seconds"] == 0.0  # the first state follows no command
+    assert states[0]["timing"]["step_wall_seconds"] == 0.0
+    for state in states[1:]:
+        timing = state["timing"]
+        assert timing["step_wall_seconds"] > 0.0
+        assert timing["publish_wall_seconds"] > 0.0
+        assert timing["command_wait_wall_seconds"] >= 0.0
+    assert states[1]["timing"]["command_wait_wall_seconds"] >= 0.2  # the controller's deliberate pause
+
+
 def test_lockstep_asks_again_when_a_command_is_dropped(tmp_path):
     params = copy.deepcopy(load_vehicle_params())
     params["fidelity_mode"] = "hil"

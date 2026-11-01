@@ -57,9 +57,16 @@ class _SimulationRuntime:
         self.frame_recorder = FrameRecorder(scene, scene.request.record_path)
         self.timing_config = resolve_timing_config(scene)
         _, self.send_port = scene.request.resolved_ports()
+        # Wall time of the simulator's own work, reported in the timing block
+        # of each state packet: the steps since the last publish, the previous
+        # packet's build and send, and (lockstep) the wait for the command.
+        self.step_wall_seconds = 0.0
+        self.publish_wall_seconds = 0.0
+        self.command_wait_wall_seconds: float | None = None
 
     def step_physics_once(self) -> None:
         """Actuator/aero effects + visual bookkeeping + one mj_step."""
+        started = time.perf_counter()
         scene = self.scene
         # "Active" means a command has actually been APPLIED to the physics —
         # under HIL network delay/loss a packet can be received long before it
@@ -77,8 +84,15 @@ class _SimulationRuntime:
         self.frame_recorder.capture(scene.data, active)
         mujoco.mj_step(scene.model, scene.data)
         self.actuator_model.restore(scene.data)
+        self.step_wall_seconds += time.perf_counter() - started
 
     def publish_state(self, sock, realtime_factor: float, session_timing: SessionTimingTracker) -> None:
+        started = time.perf_counter()
+        timing = session_timing.snapshot(self.scene.data.time, realtime_factor)
+        timing["step_wall_seconds"] = self.step_wall_seconds
+        timing["publish_wall_seconds"] = self.publish_wall_seconds
+        if self.command_wait_wall_seconds is not None:
+            timing["command_wait_wall_seconds"] = self.command_wait_wall_seconds
         self.state_publisher.send_state(
             sock,
             self.scene.request.state_target_ip,
@@ -86,8 +100,10 @@ class _SimulationRuntime:
             realtime_factor,
             self.actuator_model.snapshot(),
             aero_snapshot=self.aerodynamics_model.snapshot(),
-            timing=session_timing.snapshot(self.scene.data.time, realtime_factor),
+            timing=timing,
         )
+        self.step_wall_seconds = 0.0
+        self.publish_wall_seconds = time.perf_counter() - started
 
     def republish_state(self, sock) -> None:
         self.state_publisher.resend_last(sock, self.scene.request.state_target_ip, self.send_port)
@@ -185,14 +201,17 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     def republish_state() -> None:
         runtime.republish_state(sock)
 
+    runtime.command_wait_wall_seconds = 0.0  # the first state follows no command
     publish_state()
     try:
         while (viewer is None or viewer.is_running()) and (duration_seconds is None or scene.data.time < duration_seconds):
+            wait_started = time.perf_counter()
             if not runtime.command_dispatcher.wait_for_command(
                 sock, scene.data, republish=republish_state, request_again=publish_state
             ):
                 print("lockstep: no control command received within the timeout; stopping simulation")
                 return
+            runtime.command_wait_wall_seconds = time.perf_counter() - wait_started
             for _ in range(publish_every):
                 runtime.step_physics_once()
             publish_state()

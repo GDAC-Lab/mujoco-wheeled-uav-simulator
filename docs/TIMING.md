@@ -74,7 +74,7 @@ Controller-side nominal dt (in project-repo controllers layered on top of this s
 
 ## State packet `timing` block
 
-Every published state includes a `timing` object (see `SessionTimingTracker.snapshot()`):
+Every published state includes a `timing` object, built by `SessionTimingTracker.snapshot()` and completed with the simulator's own wall times by the stepping loops (`runtime/loop.py`):
 
 | Field | Meaning |
 | --- | --- |
@@ -86,8 +86,13 @@ Every published state includes a `timing` object (see `SessionTimingTracker.snap
 | `session_sim_elapsed_seconds` | Simulator time since session start |
 | `sim_wall_skew_seconds` | `session_sim_elapsed − session_wall_elapsed` (meaningful in `realtime`) |
 | `realtime_factor` | Rolling sim/wall rate (≈1.0 in `realtime`) |
+| `step_wall_seconds` | Wall time the simulator spent in its steps since the previous state: the physics plus the per-step work (actuator dynamics, aerodynamics, overlays, and `--record` frames) |
+| `publish_wall_seconds` | Wall time it spent building and sending the previous state packet |
+| `command_wait_wall_seconds` | `lockstep` only: wall time it waited for the command that started this control period |
 
 Top-level `realtime_factor` duplicates the rolling estimate for backward compatibility.
+
+The last three fields split a controller's round trip: in `lockstep` the time a controller waits for the next state is roughly `step_wall_seconds` plus the build and send of that state (reported as `publish_wall_seconds` in the following packet) plus the UDP transfer.
 
 ## Diagnostics
 

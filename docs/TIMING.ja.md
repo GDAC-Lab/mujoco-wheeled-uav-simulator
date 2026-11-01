@@ -72,7 +72,7 @@ CLI 上書き: `simulate --pacing-mode accelerated`、`simulate --no-hold-until-
 
 ## 状態パケットの `timing` ブロック
 
-すべての状態パケットに `timing` オブジェクトが載ります（`SessionTimingTracker.snapshot()`）。
+すべての状態パケットに `timing` オブジェクトが載ります。`SessionTimingTracker.snapshot()` が作り、シミュレータ自身の実時間はステップループ（`runtime/loop.py`）が書き足します。
 
 | フィールド | 意味 |
 | --- | --- |
@@ -84,8 +84,13 @@ CLI 上書き: `simulate --pacing-mode accelerated`、`simulate --no-hold-until-
 | `session_sim_elapsed_seconds` | セッション開始からのシミュ経過 |
 | `sim_wall_skew_seconds` | シミュ経過 − 実経過（≈0 が健全、`realtime` 時） |
 | `realtime_factor` | 実時間に対するシミュ速度（≈1.0、`realtime` 時） |
+| `step_wall_seconds` | 前回の状態送信からこの状態までのステップにかかった実時間（物理計算と、アクチュエータ動特性・空力・オーバーレイ・`--record` の描画といったステップごとの処理） |
+| `publish_wall_seconds` | 1 つ前の状態パケットの作成と送信にかかった実時間 |
+| `command_wait_wall_seconds` | `lockstep` のみ: この制御周期を始めたコマンドを待っていた実時間 |
 
 後方互換のため、トップレベルの `realtime_factor` にも同じ値が入ります。
+
+最後の 3 つでコントローラ側の往復時間を切り分けられます。`lockstep` でコントローラが次の状態を待つ時間は、おおよそ `step_wall_seconds` と、その状態の作成・送信（次のパケットの `publish_wall_seconds`）と、UDP の転送の和です。
 
 ## 診断
 
