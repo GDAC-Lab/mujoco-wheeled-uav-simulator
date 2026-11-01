@@ -163,6 +163,15 @@ multi_uav_formation_controller('num_uavs', 3)
 multi_uav_formation_controller('num_uavs', 3, 'formation_radius', 2.0, 'spawn_radius', 2.0, 'base_height', 1.8)
 ```
 
+台数が多いときは、物理計算と状態パケットがボトルネックにならないよう `simulate` の 2 つのオプションを使えます（どちらも既定はオフ）。
+
+```powershell
+uv run mujoco-wheeled-uav-simulator simulate --num-uavs 32 --physics-threads 8 --state-format binary
+```
+
+- `--physics-threads N`（`simulation.physics_threads`）: 機体ごとに専用の物理 world で計算し、それらを `N` 個のスレッドで進めます。制御周期 1 回分の物理計算が複数コアに分散されます。別々の world にいる機体どうしは衝突しません（2 機が接触しうる距離まで近づくと、最初の 1 回だけ警告を表示します）。結果は `N` に依存しません。`--record` とは併用できません。
+- `--state-format binary`（`simulation.state_format`）: 状態パケットを JSON ではなく固定レイアウトのバイナリで送ります（[docs/STATE_PACKETS.ja.md](docs/STATE_PACKETS.ja.md)）。大きさは約 4 分の 1 で、シミュレータ側の作成も軽くなります。JSON のパケットは約 40 機で UDP データグラムの上限を超えますが、バイナリなら約 170 機まで 1 データグラムに収まります。`uavsim.Protocol.read_latest_state` と Python の参照コントローラはどちらの形式も同じ値に解読します（MATLAB の `jsondecode` は速いので、MATLAB での解読時間は JSON とほぼ同じです）。バイナリのパケットは接触の集計を含みますが、接触 1 件ごとの詳細は含まず、アクチュエータ・センサ真値・空力のログとは併用できません。
+
 ### 独立した複数 simulator instance
 
 このモードは、単体機の切り分け実験や比較用に向いています。
@@ -278,6 +287,7 @@ MATLAB controller のローカル UDP ポートが既に使用中だと表示さ
 - 任意のソルバ設定: `simulation.integrator`（`Euler`, `RK4`, `implicit`, `implicitfast`）、`simulation.cone`（`pyramidal`, `elliptic`）、`simulation.iterations`、`simulation.noslip_iterations`
 - 状態送信の間引き `simulation.state_publish_every_n_steps`（既定 1 = 毎ステップ；同梱 config は 5 = 200 Hz）
 - ビューア更新レート `simulation.viewer_fps`（既定 60；物理レートとは非同期）
+- 多数機向け: `simulation.physics_threads`（既定 0 = 全機を 1 つの物理 world で計算；N >= 1 = 機体ごとの world を N スレッドで計算）と `simulation.state_format`（既定 `"json"`、または `"binary"`）。[1つの MuJoCo world での編隊制御](#1つの-mujoco-world-での編隊制御) を参照。`simulate` の `--physics-threads`・`--state-format` で上書きできます
 - 起動時フリーズ `simulation.hold_until_first_command`（既定 config では `true`）: 最初の control command が届くまで機体を spawn 時の状態（姿勢と初速度）で固定します。hover・編隊・バッチ実行など自動実行で、接続待ちの間に姿勢が乱れないきれいな初期条件を保証します。床置きスタートのプリセットは各自の JSON で `false` を設定します。実行ごとの上書きは `simulate --hold-until-first-command` / `--no-hold-until-first-command`。`lockstep` pacing では command 受信でしか物理が進まないため無関係です。
 - アーム長（または `actuation.rotors` による各ロータ幾何の明示指定：位置・推力軸・回転方向・反トルク比）
 - 反トルク係数

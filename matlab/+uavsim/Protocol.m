@@ -13,10 +13,21 @@ classdef Protocol
                 return;
             end
 
-            data_packet = read(controller_socket, controller_socket.NumDatagramsAvailable, "string");
-            latest_packet = data_packet(end).Data;
-            state = jsondecode(latest_packet);
+            data_packet = read(controller_socket, controller_socket.NumDatagramsAvailable, "uint8");
+            state = uavsim.Protocol.decode_state(data_packet(end).Data);
             state = uavsim.Protocol.attach_state_packet_metrics(state);
+        end
+
+        function state = decode_state(datagram)
+            % Decode a state datagram, JSON or binary (simulation.state_format;
+            % see wheeled_uav/state_packets.py), into the struct jsondecode
+            % gives for the JSON packet of the same state.
+            datagram = reshape(uint8(datagram), 1, []);
+            if numel(datagram) >= 4 && all(datagram(1:4) == uint8('WUAV'))
+                state = uavsim.Protocol.decode_binary_state(datagram);
+            else
+                state = jsondecode(native2unicode(datagram, 'UTF-8'));
+            end
         end
 
         function state = attach_state_packet_metrics(state)
@@ -367,6 +378,107 @@ classdef Protocol
     end
 
     methods (Static, Access = private)
+        function state = decode_binary_state(datagram)
+            % Layout version 1 of wheeled_uav/state_packets.py: a 52-byte header,
+            % ten timing values, the UAV names, then one float64 row per UAV.
+            if typecast(datagram(5:6), 'uint16') ~= 1
+                error('uavsim:Protocol:binaryLayout', 'Unsupported binary state packet layout %d.', ...
+                    typecast(datagram(5:6), 'uint16'));
+            end
+            num_uavs = double(typecast(datagram(9:10), 'uint16'));
+            record_length = double(typecast(datagram(11:12), 'uint16'));
+            flags = double(typecast(datagram(15:16), 'uint16'));
+            instance_id = double(typecast(datagram(17:20), 'int32'));
+            sim_time_and_rtf = typecast(datagram(37:52), 'double');
+            timing_values = typecast(datagram(53:132), 'double');
+            names_length = double(typecast(datagram(133:134), 'uint16'));
+            name_bytes = datagram(135:134 + names_length);
+            if all(name_bytes < 128)
+                name_text = char(name_bytes);
+            else
+                name_text = native2unicode(name_bytes, 'UTF-8');
+            end
+            breaks = [0, find(name_text == char(10)), numel(name_text) + 1];
+            names = cell(1, num_uavs);
+            for uav_index = 1:num_uavs
+                names{uav_index} = name_text(breaks(uav_index) + 1:breaks(uav_index + 1) - 1);
+            end
+            offset = 134 + names_length;
+            offset = offset + mod(-offset, 8);
+            values = reshape(typecast(datagram(offset + 1:offset + 8 * record_length * num_uavs), 'double'), ...
+                record_length, num_uavs);
+
+            fidelity_modes = {'baseline', 'hil'};
+            fidelity_mode = [];   % code 255: no mode (jsondecode gives [] for null)
+            if datagram(13) < numel(fidelity_modes)
+                fidelity_mode = fidelity_modes{double(datagram(13)) + 1};
+            end
+            state = struct( ...
+                'protocol_version', double(typecast(datagram(7:8), 'uint16')), ...
+                'sequence', double(typecast(datagram(21:28), 'int64')), ...
+                'wall_time_send_ns', double(typecast(datagram(29:36), 'int64')), ...
+                'fidelity_mode', fidelity_mode, ...
+                'sim_time', sim_time_and_rtf(1) ...
+            );
+            pacing_modes = {'realtime', 'accelerated', 'lockstep'};
+            if flags == 34815   % every timing value and the pacing mode (the simulator's packets)
+                v = timing_values;
+                state.timing = struct('physics_timestep_seconds', v(1), 'control_period_seconds', v(2), ...
+                    'publish_every_n_steps', v(3), 'pacing_mode', pacing_modes{double(datagram(14)) + 1}, ...
+                    'session_wall_elapsed_seconds', v(4), 'session_sim_elapsed_seconds', v(5), ...
+                    'sim_wall_skew_seconds', v(6), 'realtime_factor', v(7), 'step_wall_seconds', v(8), ...
+                    'publish_wall_seconds', v(9), 'command_wait_wall_seconds', v(10));
+            elseif bitand(flags, 32768)
+                timing_fields = {'physics_timestep_seconds', 'control_period_seconds', 'publish_every_n_steps', ...
+                    'session_wall_elapsed_seconds', 'session_sim_elapsed_seconds', 'sim_wall_skew_seconds', ...
+                    'realtime_factor', 'step_wall_seconds', 'publish_wall_seconds', 'command_wait_wall_seconds'};
+                timing = struct();
+                for index = 1:numel(timing_fields)
+                    if index == 4 && bitand(flags, 1024)   % pacing_mode precedes the session times, as in the JSON
+                        timing.pacing_mode = pacing_modes{double(datagram(14)) + 1};
+                    end
+                    if bitand(flags, 2 ^ (index - 1))
+                        timing.(timing_fields{index}) = timing_values(index);
+                    end
+                end
+                state.timing = timing;
+            end
+
+            % The record's rows in the order of state_packets.py, built into the
+            % structs jsondecode gives (a few whole-array calls: per-element
+            % code costs more than jsondecode itself for small teams).
+            cells = num2cell(values);
+            contact_fields = {'count'; 'total_force_magnitude'; 'max_force_magnitude'; ...
+                'total_normal_force'; 'max_normal_force'};
+            groups = cell(4, num_uavs);   % left_wheel, right_wheel, surface, wall
+            for group_index = 1:4
+                groups(group_index, :) = num2cell(cell2struct(cells(21 + 5 * group_index + (1:5), :), contact_fields, 1));
+            end
+            contact_summaries = cell2struct([cells(22:26, :); groups], ...
+                [contact_fields; {'left_wheel'; 'right_wheel'; 'surface'; 'wall'}], 1);
+            columns = @(first, last) num2cell(values(first:last, :), 1);
+            uavs = cell2struct([names; repmat({sim_time_and_rtf(1)}, 1, num_uavs); ...
+                columns(1, 3); columns(4, 6); columns(7, 9); columns(10, 12); columns(13, 21); ...
+                cells(3, :); cells(6, :); cells(9, :); ...
+                repmat({sim_time_and_rtf(2)}, 1, num_uavs); repmat({instance_id}, 1, num_uavs); ...
+                reshape(num2cell(contact_summaries), 1, []); repmat({[]}, 1, num_uavs)], ...
+                {'name'; 'time'; 'position'; 'velocity'; 'angular_velocity_world'; 'angular_velocity_body'; ...
+                'rotation_matrix'; 'z'; 'vz'; 'yaw_rate'; 'realtime_factor'; 'instance_id'; ...
+                'contact_summary'; 'contacts'}, 1);
+
+            if num_uavs == 1   % single-UAV packets carry the UAV's fields at the top level
+                for field_name = fieldnames(uavs)'
+                    state.(field_name{1}) = uavs.(field_name{1});
+                end
+                return;
+            end
+            state.time = sim_time_and_rtf(1);
+            state.instance_id = instance_id;
+            state.num_uavs = num_uavs;
+            state.realtime_factor = sim_time_and_rtf(2);
+            state.uavs = uavs;
+        end
+
         function options = parse_command_options(default_fidelity_mode, args)
             options = struct( ...
                 'sequence', [], ...

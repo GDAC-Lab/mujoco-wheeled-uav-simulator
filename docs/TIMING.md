@@ -90,7 +90,7 @@ Every published state includes a `timing` object, built by `SessionTimingTracker
 | `publish_wall_seconds` | Wall time it spent building and sending the previous state packet |
 | `command_wait_wall_seconds` | `lockstep` only: wall time it waited for the command that started this control period |
 
-Top-level `realtime_factor` duplicates the rolling estimate for backward compatibility.
+Top-level `realtime_factor` duplicates the rolling estimate for backward compatibility. Binary state packets (`simulation.state_format = "binary"`, [STATE_PACKETS.md](STATE_PACKETS.md)) carry the same block.
 
 The last three fields split a controller's round trip: in `lockstep` the time a controller waits for the next state is roughly `step_wall_seconds` plus the build and send of that state (reported as `publish_wall_seconds` in the following packet) plus the UDP transfer.
 

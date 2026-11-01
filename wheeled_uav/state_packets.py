@@ -57,6 +57,7 @@ _TIMING = struct.Struct(f"<{len(_TIMING_FIELDS)}d")
 _FLAG_PACING_MODE = 1 << len(_TIMING_FIELDS)
 _FLAG_TIMING = 1 << 15
 _FIDELITY_MODES = ("baseline", "hil")
+_NO_FIDELITY_MODE = 255
 _PACING_MODES = ("realtime", "accelerated", "lockstep")
 _VECTORS = (
     ("position", 3),
@@ -114,7 +115,7 @@ def encode_state_packet(packet: dict[str, Any], uav_states: list[dict[str, Any]]
         int(packet["protocol_version"]),
         len(uav_states),
         RECORD_LENGTH,
-        _FIDELITY_MODES.index(packet["fidelity_mode"]),
+        _NO_FIDELITY_MODE if packet["fidelity_mode"] is None else _FIDELITY_MODES.index(packet["fidelity_mode"]),
         pacing_code,
         flags,
         int(first["instance_id"]),
@@ -171,7 +172,7 @@ def _decode_binary(datagram: bytes) -> dict[str, Any]:
         "protocol_version": protocol_version,
         "sequence": sequence,
         "wall_time_send_ns": wall_time_send_ns,
-        "fidelity_mode": _FIDELITY_MODES[fidelity_code],
+        "fidelity_mode": None if fidelity_code == _NO_FIDELITY_MODE else _FIDELITY_MODES[fidelity_code],
         "sim_time": sim_time,
     }
     if flags & _FLAG_TIMING:

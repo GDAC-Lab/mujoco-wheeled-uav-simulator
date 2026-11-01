@@ -171,6 +171,15 @@ multi_uav_formation_controller('num_uavs', 3)
 multi_uav_formation_controller('num_uavs', 3, 'formation_radius', 2.0, 'spawn_radius', 2.0, 'base_height', 1.8)
 ```
 
+For large teams, two `simulate` options keep the physics and the state packets from becoming the bottleneck (both are off by default):
+
+```powershell
+uv run mujoco-wheeled-uav-simulator simulate --num-uavs 32 --physics-threads 8 --state-format binary
+```
+
+- `--physics-threads N` (`simulation.physics_threads`) simulates each UAV in a physics world of its own and steps the worlds on `N` threads, so a control period's physics is spread over the cores. Vehicles in separate worlds do not collide with each other: the simulator prints a warning the first time two of them come close enough to touch. The results do not depend on `N`. Not available with `--record`.
+- `--state-format binary` (`simulation.state_format`) sends each state packet in a compact fixed layout instead of JSON ([docs/STATE_PACKETS.md](docs/STATE_PACKETS.md)). It is about a quarter of the size and quicker for the simulator to build, and teams of up to about 170 UAVs fit one UDP datagram, while JSON packets pass the datagram limit at about 40 UAVs. `uavsim.Protocol.read_latest_state` and the Python reference controller decode both formats into the same values (MATLAB's `jsondecode` is fast, so there a binary packet takes about as long to decode as a JSON one). Binary packets carry the contact summaries but not the per-contact details, and refuse the actuator, sensor-truth and aerodynamics logs.
+
 ### Multiple Independent Simulator Instances
 
 This mode is mainly useful for isolated single-UAV experiments and comparisons.
@@ -286,6 +295,7 @@ Key vehicle and actuator parameters are centralized in `vehicle_params.json`. At
 - optional solver settings: `simulation.integrator` (`Euler`, `RK4`, `implicit`, `implicitfast`), `simulation.cone` (`pyramidal`, `elliptic`), `simulation.iterations`, `simulation.noslip_iterations`
 - optional state publishing decimation: `simulation.state_publish_every_n_steps` (default 1 = every step; the bundled config uses 5 = 200 Hz)
 - viewer refresh rate: `simulation.viewer_fps` (default 60; the viewer no longer syncs at the physics rate)
+- large teams: `simulation.physics_threads` (default 0 = all UAVs in one physics world; N >= 1 = a world per UAV, stepped on N threads) and `simulation.state_format` (`"json"`, the default, or `"binary"`), see [Multi-UAV Formation in One MuJoCo World](#multi-uav-formation-in-one-mujoco-world); the `--physics-threads` and `--state-format` options of `simulate` override them
 - startup freeze: `simulation.hold_until_first_command` (default config: `true`) freezes the vehicles at their spawn state (pose and initial velocity) until the first control command arrives, giving automatic/scripted runs (hover, formation, batch studies) a clean, reproducible initial condition. Presets that start physically resting on the ground set it to `false` in their JSON instead. Override per run with `simulate --hold-until-first-command` / `--no-hold-until-first-command`. Irrelevant in `lockstep` pacing, where physics only advances on received commands anyway.
 - arm lengths, or an explicit per-rotor geometry list under `actuation.rotors` (position, thrust axis, spin sign, yaw moment ratio)
 - yaw moment coefficient

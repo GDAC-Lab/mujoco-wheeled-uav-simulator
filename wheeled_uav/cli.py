@@ -67,7 +67,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     # Defaults for a bare invocation (no subcommand -> simulate). Every option
     # read by the simulate handler must appear here or a bare run raises
     # AttributeError; test_cli.py pins this by asserting parse_args([]).
-    parser.set_defaults(instance_id=0, num_uavs=1, spawn_radius=1.5, recv_port=None, send_port=None, bind_ip=None, state_target_ip=None, params_file=None, preset=None, xml_template_file=None, generated_xml_dir=None, fidelity_mode=None, pacing_mode=None, headless=False, duration_seconds=None, record=None, hold_until_first_command=None, physics_threads=None)
+    parser.set_defaults(instance_id=0, num_uavs=1, spawn_radius=1.5, recv_port=None, send_port=None, bind_ip=None, state_target_ip=None, params_file=None, preset=None, xml_template_file=None, generated_xml_dir=None, fidelity_mode=None, pacing_mode=None, headless=False, duration_seconds=None, record=None, hold_until_first_command=None, physics_threads=None, state_format=None)
     subparsers = parser.add_subparsers(dest="command")
 
     simulate_parser = subparsers.add_parser("simulate", help="Run the MuJoCo simulator with viewer")
@@ -104,6 +104,16 @@ def build_cli_parser() -> argparse.ArgumentParser:
             "Simulate each UAV in a physics world of its own and step the worlds on N threads "
             "(0: one world for all UAVs, the default). Vehicles in separate worlds do not collide "
             "with each other. Overrides simulation.physics_threads in the params file."
+        ),
+    )
+    simulate_parser.add_argument(
+        "--state-format",
+        choices=("json", "binary"),
+        default=None,
+        help=(
+            "Encoding of the state packets: json (default) or binary, a compact fixed layout that "
+            "keeps large teams within one UDP datagram (uavsim decodes both). Overrides "
+            "simulation.state_format in the params file."
         ),
     )
     simulate_parser.add_argument("--record", default=None, metavar="PATH", help="Also write an offscreen render of the run to this video file (extension picks the format, e.g. .mp4 or .gif). Resolution/fps come from environment.recording in the params.")
@@ -185,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                 record_path=arguments.record,
                 hold_until_first_command=arguments.hold_until_first_command,
                 physics_threads=arguments.physics_threads,
+                state_format=arguments.state_format,
             )
         )
         return 0

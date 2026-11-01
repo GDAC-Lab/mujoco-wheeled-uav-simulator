@@ -61,8 +61,22 @@ class CliParserTests(unittest.TestCase):
             "bind_ip", "state_target_ip", "params_file", "preset", "xml_template_file",
             "generated_xml_dir", "fidelity_mode", "pacing_mode", "headless",
             "duration_seconds", "record", "hold_until_first_command",
+            "physics_threads", "state_format",
         ):
             self.assertTrue(hasattr(arguments, option_name), f"missing default for {option_name}")
+
+    def test_simulate_large_team_options_reach_the_request(self) -> None:
+        with patch("wheeled_uav.runtime.run_simulation") as run_simulation:
+            main(["simulate", "--headless", "--num-uavs", "8", "--physics-threads", "4", "--state-format", "binary"])
+            main(["simulate", "--headless"])
+
+        first, second = (call.args[0] for call in run_simulation.call_args_list)
+        self.assertEqual((first.physics_threads, first.state_format), (4, "binary"))
+        # None -> simulation.physics_threads / simulation.state_format in the params file decide.
+        self.assertEqual((second.physics_threads, second.state_format), (None, None))
+        for invalid in (["--state-format", "msgpack"], ["--physics-threads", "-1"]):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["simulate", "--headless", *invalid])
 
     def test_spawn_radius_zero_is_accepted_and_negative_rejected(self) -> None:
         # Explicit spawns and single-UAV runs never place a ring, so 0 must pass the CLI.

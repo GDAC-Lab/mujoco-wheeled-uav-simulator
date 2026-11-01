@@ -88,7 +88,7 @@ CLI 上書き: `simulate --pacing-mode accelerated`、`simulate --no-hold-until-
 | `publish_wall_seconds` | 1 つ前の状態パケットの作成と送信にかかった実時間 |
 | `command_wait_wall_seconds` | `lockstep` のみ: この制御周期を始めたコマンドを待っていた実時間 |
 
-後方互換のため、トップレベルの `realtime_factor` にも同じ値が入ります。
+後方互換のため、トップレベルの `realtime_factor` にも同じ値が入ります。バイナリの状態パケット（`simulation.state_format = "binary"`、[STATE_PACKETS.ja.md](STATE_PACKETS.ja.md)）も同じブロックを持ちます。
 
 最後の 3 つでコントローラ側の往復時間を切り分けられます。`lockstep` でコントローラが次の状態を待つ時間は、おおよそ `step_wall_seconds` と、その状態の作成・送信（次のパケットの `publish_wall_seconds`）と、UDP の転送の和です。
 
