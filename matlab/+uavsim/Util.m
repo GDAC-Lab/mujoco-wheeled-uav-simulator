@@ -84,7 +84,15 @@ classdef Util
         end
 
         function time_ns = wall_time_now_ns()
-            time_ns = floor(posixtime(datetime('now', 'TimeZone', 'UTC')) * 1.0e9);
+            % Wall-clock time in ns since the Unix epoch (UTC), as stamped into
+            % packets for age metrics. datetime('now') costs about 0.1 ms, so it
+            % is read once per second as an anchor and tic/toc fills in between.
+            persistent anchor_ns anchor_timer
+            if isempty(anchor_ns) || toc(anchor_timer) > 1.0
+                anchor_ns = floor(posixtime(datetime('now', 'TimeZone', 'UTC')) * 1.0e9);
+                anchor_timer = tic;
+            end
+            time_ns = anchor_ns + floor(toc(anchor_timer) * 1.0e9);
         end
     end
 end

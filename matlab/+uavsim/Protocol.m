@@ -71,6 +71,17 @@ classdef Protocol
         end
 
         function state_metrics = get_state_packet_metrics(state)
+            if isstruct(state) && isfield(state, 'packet_metrics')
+                metrics = state.packet_metrics;
+                if isstruct(metrics) && isscalar(metrics) && isequal(fieldnames(metrics), ...
+                        {'protocol_version'; 'sequence'; 'wall_time_send_ns'; 'fidelity_mode'; 'age_ms'})
+                    % Already normalized by read_latest_state (extract_packet_metrics):
+                    % hand it back instead of rebuilding it field by field, since
+                    % controllers call this once per UAV and control period.
+                    state_metrics = metrics;
+                    return;
+                end
+            end
             default_metrics = struct( ...
                 'protocol_version', 1.0, ...
                 'sequence', NaN, ...
@@ -235,40 +246,38 @@ classdef Protocol
         end
 
         function control_command = build_control_command(rotor_thrusts, command_options, varargin)
-            parser = inputParser;
-            addParameter(parser, 'sequence', [], @(value) isempty(value) || (isnumeric(value) && isscalar(value)));
-            addParameter(parser, 'source_state_sequence', [], @(value) isempty(value) || (isnumeric(value) && isscalar(value)));
-            addParameter(parser, 'wall_time_send_ns', [], @(value) isempty(value) || (isnumeric(value) && isscalar(value)));
-            addParameter(parser, 'controller_compute_ms', [], @(value) isempty(value) || (isnumeric(value) && isscalar(value)));
-            addParameter(parser, 'state_age_ms', [], @(value) isempty(value) || (isnumeric(value) && isscalar(value)));
-            addParameter(parser, 'state_sequence_gap', [], @(value) isempty(value) || (isnumeric(value) && isscalar(value)));
-            addParameter(parser, 'fidelity_mode', command_options.fidelity_mode, @(value) ischar(value) || (isstring(value) && isscalar(value)));
-            addParameter(parser, 'body_wrench', [], @(value) isempty(value) || (isnumeric(value) && numel(value) == 6));
-            parse(parser, varargin{:});
+            % Name-value options: sequence, source_state_sequence,
+            % wall_time_send_ns, controller_compute_ms, state_age_ms,
+            % state_sequence_gap (numeric scalars or []), fidelity_mode (text)
+            % and body_wrench (6 numbers or []). Names match as with
+            % inputParser (case-insensitive, unique prefixes, an options struct
+            % expands) but are parsed by hand: this runs once per UAV and
+            % control period, and an inputParser costs about 0.3 ms per call.
+            options = uavsim.Protocol.parse_command_options(command_options.fidelity_mode, varargin);
 
             control_command = struct('rotor_thrusts', rotor_thrusts(:)');
-            if ~isempty(parser.Results.body_wrench)
+            if ~isempty(options.body_wrench)
                 % Optional world-frame external wrench [Fx,Fy,Fz,Mx,My,Mz]
                 % (tilt-rotor emulation), applied via data.xfrc_applied.
-                control_command.body_wrench = reshape(double(parser.Results.body_wrench), 1, 6);
+                control_command.body_wrench = reshape(double(options.body_wrench), 1, 6);
             end
             if strcmp(command_options.input_mode, 'omega')
                 control_command.rotor_omega = uavsim.Protocol.thrust_to_rotor_omega(rotor_thrusts, command_options.thrust_coefficient)';
             end
 
-            if ~isempty(parser.Results.sequence)
+            if ~isempty(options.sequence)
                 control_command.packet_metadata = struct( ...
                     'protocol_version', 2, ...
-                    'sequence', double(parser.Results.sequence), ...
-                    'source_state_sequence', double(parser.Results.source_state_sequence), ...
-                    'wall_time_send_ns', double(parser.Results.wall_time_send_ns), ...
-                    'fidelity_mode', char(parser.Results.fidelity_mode) ...
+                    'sequence', double(options.sequence), ...
+                    'source_state_sequence', double(options.source_state_sequence), ...
+                    'wall_time_send_ns', double(options.wall_time_send_ns), ...
+                    'fidelity_mode', char(options.fidelity_mode) ...
                 );
             end
             control_command.runtime_metrics = struct( ...
-                'controller_compute_ms', uavsim.Util.default_numeric(parser.Results.controller_compute_ms), ...
-                'state_age_ms', uavsim.Util.default_numeric(parser.Results.state_age_ms), ...
-                'state_sequence_gap', uavsim.Util.default_numeric(parser.Results.state_sequence_gap) ...
+                'controller_compute_ms', uavsim.Util.default_numeric(options.controller_compute_ms), ...
+                'state_age_ms', uavsim.Util.default_numeric(options.state_age_ms), ...
+                'state_sequence_gap', uavsim.Util.default_numeric(options.state_sequence_gap) ...
             );
         end
 
@@ -358,6 +367,54 @@ classdef Protocol
     end
 
     methods (Static, Access = private)
+        function options = parse_command_options(default_fidelity_mode, args)
+            options = struct( ...
+                'sequence', [], ...
+                'source_state_sequence', [], ...
+                'wall_time_send_ns', [], ...
+                'controller_compute_ms', [], ...
+                'state_age_ms', [], ...
+                'state_sequence_gap', [], ...
+                'fidelity_mode', default_fidelity_mode, ...
+                'body_wrench', [] ...
+            );
+            if isscalar(args) && isstruct(args{1})
+                args = reshape([fieldnames(args{1})'; struct2cell(args{1})'], 1, []);
+            end
+            if mod(numel(args), 2) ~= 0
+                error('uavsim:Protocol:optionWithoutValue', 'Options must be given as name-value pairs.');
+            end
+            option_names = fieldnames(options);
+            for index = 1:2:numel(args)
+                name = args{index};
+                if ~(ischar(name) || (isstring(name) && isscalar(name)))
+                    error('uavsim:Protocol:invalidOptionName', 'Option names must be text.');
+                end
+                name = char(name);
+                matches = strcmpi(option_names, name);
+                if ~any(matches)
+                    matches = strncmpi(option_names, name, numel(name));
+                end
+                if nnz(matches) ~= 1
+                    error('uavsim:Protocol:unknownOption', '''%s'' is not a recognized or unique option.', name);
+                end
+                option_name = option_names{matches};
+                value = args{index + 1};
+                switch option_name
+                    case 'fidelity_mode'
+                        is_valid = ischar(value) || (isstring(value) && isscalar(value));
+                    case 'body_wrench'
+                        is_valid = isempty(value) || (isnumeric(value) && numel(value) == 6);
+                    otherwise
+                        is_valid = isempty(value) || (isnumeric(value) && isscalar(value));
+                end
+                if ~is_valid
+                    error('uavsim:Protocol:invalidOptionValue', 'The value of ''%s'' is invalid.', option_name);
+                end
+                options.(option_name) = value;
+            end
+        end
+
         function packet_metrics = extract_packet_metrics(packet_struct)
             wall_time_send_ns = uavsim.Util.get_struct_field(packet_struct, 'wall_time_send_ns', NaN);
             receive_time_ns = uavsim.Util.wall_time_now_ns();
