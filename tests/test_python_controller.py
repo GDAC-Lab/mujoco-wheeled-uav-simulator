@@ -252,7 +252,7 @@ class PythonHoverControllerTests(unittest.TestCase):
             {"protocol_version": 2, "sequence": 4, "wall_time_send_ns": 10, "time": 0.2, **self.nominal_state},
         )
 
-        with patch("wheeled_uav.controllers.hover.time.time_ns", return_value=2_000_010):
+        with patch("wheeled_uav.controllers.hover.wall_time_ns", return_value=2_000_010):
             state_packet = _read_latest_state(sock)
 
         self.assertIsNotNone(state_packet)

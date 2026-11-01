@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 
 from ..config import build_fidelity_config, load_vehicle_params, parse_total_mass
+from ..clock import wall_time_ns
 from ..model.builder import build_allocation_matrix, build_rotor_specs
 from ..protocol import RECV_BUFFER_SIZE, UDP_IP, create_udp_socket, get_instance_ports
 from ..timing import (
@@ -334,7 +335,7 @@ def _read_latest_state(sock: socket.socket) -> tuple[dict[str, Any], StatePacket
     if latest_packet is None:
         return None
 
-    receive_time_ns = time.time_ns()
+    receive_time_ns = wall_time_ns()
     try:
         state = json.loads(latest_packet.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -434,7 +435,7 @@ def run_hover_controller(
                     config,
                     sequence=command_sequence,
                     source_state_sequence=state_metrics.sequence,
-                    wall_time_send_ns=time.time_ns(),
+                    wall_time_send_ns=wall_time_ns(),
                     fidelity_mode=resolved_fidelity_mode,
                 ),
                 (target_ip, resolved_target_port),

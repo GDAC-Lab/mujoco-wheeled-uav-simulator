@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import socket
-import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -30,6 +29,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from .paths import ROTOR_NAMES
+from .clock import wall_time_ns
 
 __all__ = [
     "UDP_IP",
@@ -231,7 +231,7 @@ def parse_command_packet(
     rotor_thrusts = parse_control_input(control_input, params)
     if rotor_thrusts is None:
         return None
-    resolved_receive_time_ns = time.time_ns() if receive_time_ns is None else int(receive_time_ns)
+    resolved_receive_time_ns = wall_time_ns() if receive_time_ns is None else int(receive_time_ns)
     return CommandPacket(
         rotor_thrusts=rotor_thrusts,
         body_wrenches=_parse_single_body_wrench(control_input),
@@ -298,7 +298,7 @@ def receive_control_command(
     command_packet = parse_command_packet(
         control_input,
         params,
-        receive_time_ns=time.time_ns(),
+        receive_time_ns=wall_time_ns(),
         stale_command_threshold_ms=stale_command_threshold_ms,
     )
     if command_packet is None:
@@ -356,7 +356,7 @@ def parse_multi_uav_command_packet(
     if rotor_thrusts is None:
         return None
     body_wrenches = _parse_body_wrenches(control_input, num_uavs)
-    resolved_receive_time_ns = time.time_ns() if receive_time_ns is None else int(receive_time_ns)
+    resolved_receive_time_ns = wall_time_ns() if receive_time_ns is None else int(receive_time_ns)
     return CommandPacket(
         rotor_thrusts=rotor_thrusts,
         body_wrenches=body_wrenches,
@@ -419,7 +419,7 @@ def receive_multi_uav_control_command(
         control_input,
         params,
         num_uavs,
-        receive_time_ns=time.time_ns(),
+        receive_time_ns=wall_time_ns(),
         stale_command_threshold_ms=stale_command_threshold_ms,
     )
     if command_packet is None:

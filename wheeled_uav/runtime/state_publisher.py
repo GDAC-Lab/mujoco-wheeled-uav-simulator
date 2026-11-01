@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import random
 import socket
-import time
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from ..clock import wall_time_ns
 from ..protocol import build_packet_metadata
 from ..types import SensorLayout, UAVModelSpec
 from .contact import build_contact_reports
@@ -242,7 +242,7 @@ class StatePayloadPublisher:
         timing: dict[str, float] | None = None,
     ) -> None:
         self._sequence += 1
-        now_ns = time.time_ns()
+        now_ns = wall_time_ns()
         payload = self.build_payload(
             realtime_factor,
             self._sequence,
@@ -263,7 +263,7 @@ class StatePayloadPublisher:
         sample instead of answering it with a second command.
         """
         if self._last_payload is not None:
-            self._dispatch(sock, target_ip, send_port, self._last_payload, time.time_ns())
+            self._dispatch(sock, target_ip, send_port, self._last_payload, wall_time_ns())
 
     def _dispatch(self, sock: socket.socket, target_ip: str, send_port: int, payload: bytes, now_ns: int) -> None:
         if not self._network_fidelity_enabled():

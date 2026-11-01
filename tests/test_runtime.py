@@ -6,8 +6,9 @@ import socket
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -30,6 +31,14 @@ from wheeled_uav.types import (
     SensorNames,
     UAVModelSpec,
 )
+
+
+@contextmanager
+def _patched_wall_clock(**mock_kwargs):
+    """Freeze the wall clock of the command path (dispatcher and packet parser share one mock)."""
+    clock = Mock(**mock_kwargs)
+    with patch("wheeled_uav.runtime.command_dispatcher.wall_time_ns", clock), patch("wheeled_uav.protocol.wall_time_ns", clock):
+        yield clock
 
 
 class _FakeSocket:
@@ -237,7 +246,7 @@ class StatePayloadTests(unittest.TestCase):
         publisher.build_payload = build_payload
         sock = _FakeSocket()
 
-        with patch("wheeled_uav.runtime.state_publisher.time.time_ns", side_effect=[1_000_000, 7_000_000]):
+        with patch("wheeled_uav.runtime.state_publisher.wall_time_ns", side_effect=[1_000_000, 7_000_000]):
             publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)
             publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)
 
@@ -310,9 +319,9 @@ class CommandDispatcherTests(unittest.TestCase):
             address = simulator_socket.getsockname()
             sender = threading.Timer(0.05, controller_socket.sendto, args=(command, address))
             sender.start()
-            started = time.monotonic()
+            started = time.perf_counter()
             applied = dispatcher.wait_for_command(simulator_socket, data, timeout_seconds=5.0)
-            elapsed = time.monotonic() - started
+            elapsed = time.perf_counter() - started
             sender.join()
 
         self.assertTrue(applied)
@@ -333,9 +342,9 @@ class CommandDispatcherTests(unittest.TestCase):
         ):
             controller_socket.sendto(json.dumps({"rotor_thrusts": [2.0, 2.0, 2.0, 2.0]}).encode("utf-8"), simulator_socket.getsockname())
             select.select([simulator_socket], [], [], 5.0)  # the command is queued before the wait starts
-            started = time.monotonic()
+            started = time.perf_counter()
             applied = dispatcher.wait_for_command(simulator_socket, data, timeout_seconds=5.0)
-            elapsed = time.monotonic() - started
+            elapsed = time.perf_counter() - started
 
         # No second datagram arrives: the wait must wake by itself when the held-back command is due.
         self.assertTrue(applied)
@@ -396,11 +405,11 @@ class CommandDispatcherTests(unittest.TestCase):
         )
         data = _FakeData(4)
 
-        with patch("wheeled_uav.runtime.command_dispatcher.time.time_ns", return_value=1_000_000):
+        with _patched_wall_clock(return_value=1_000_000):
             dispatcher.apply_next_command(_FakeSocket({"sequence": 1, "rotor_thrusts": [1.0, 2.0, 3.0, 4.0]}), data)
 
         data.ctrl[:] = [0.0, 0.0, 0.0, 0.0]
-        with patch("wheeled_uav.runtime.command_dispatcher.time.time_ns", return_value=20_000_000):
+        with _patched_wall_clock(return_value=20_000_000):
             dispatcher.apply_next_command(_FakeSocket(), data)
 
         np.testing.assert_allclose(data.ctrl, np.array([1.0, 2.0, 3.0, 4.0]))
@@ -418,7 +427,7 @@ class CommandDispatcherTests(unittest.TestCase):
         )
         data = _FakeData(4)
 
-        with patch("wheeled_uav.runtime.command_dispatcher.time.time_ns", return_value=1_000_000):
+        with _patched_wall_clock(return_value=1_000_000):
             dispatcher.apply_next_command(
                 _FakeSocket({"sequence": 1, "wall_time_send_ns": 1_000_000, "rotor_thrusts": [1.0, 1.0, 1.0, 1.0]}), data
             )
@@ -426,7 +435,7 @@ class CommandDispatcherTests(unittest.TestCase):
 
         # A packet 20 ms old (> 5 ms threshold) must be ignored in favor of
         # the last fresh command.
-        with patch("wheeled_uav.runtime.command_dispatcher.time.time_ns", return_value=21_000_000):
+        with _patched_wall_clock(return_value=21_000_000):
             dispatcher.apply_next_command(
                 _FakeSocket({"sequence": 2, "wall_time_send_ns": 1_000_000, "rotor_thrusts": [9.0, 9.0, 9.0, 9.0]}), data
             )
@@ -485,7 +494,7 @@ class CommandDispatcherTests(unittest.TestCase):
         )
         data = _FakeData(4)
 
-        with patch("wheeled_uav.runtime.command_dispatcher.time.time_ns", side_effect=[1_000_000, 1_000_000, 7_000_000]):
+        with _patched_wall_clock(side_effect=[1_000_000, 1_000_000, 7_000_000]):
             dispatcher.apply_next_command(_FakeSocket({"sequence": 1, "rotor_thrusts": [1.0, 2.0, 3.0, 4.0]}), data)
             np.testing.assert_allclose(data.ctrl, np.zeros(4))
             dispatcher.apply_next_command(_FakeSocket(), data)

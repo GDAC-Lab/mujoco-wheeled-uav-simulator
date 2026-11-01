@@ -18,6 +18,7 @@ from typing import Any
 import mujoco
 
 from ..config import parse_total_mass
+from ..clock import wall_time_ns
 from ..protocol import (
     CommandPacket,
     receive_control_command,
@@ -234,7 +235,7 @@ class ControlCommandDispatcher:
         return [[float(thrust) for thrust in uav_command] for uav_command in rotor_thrusts]
 
     def apply_next_command(self, sock: socket.socket, data: mujoco.MjData) -> None:
-        now_ns = time.time_ns()
+        now_ns = wall_time_ns()
         incoming_command = self._receive_latest_command(sock)
         if incoming_command is not None:
             self.has_received_command = True
@@ -292,7 +293,7 @@ class ControlCommandDispatcher:
         if not self._pending_commands:
             return math.inf
         next_release_ns = min(pending.release_time_ns for pending in self._pending_commands)
-        return max(0.0, (next_release_ns - time.time_ns()) / 1.0e9)
+        return max(0.0, (next_release_ns - wall_time_ns()) / 1.0e9)
 
     def wait_for_command(
         self,
