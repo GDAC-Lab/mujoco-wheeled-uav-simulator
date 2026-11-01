@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import select
 import socket
 import threading
 import time
@@ -331,6 +332,7 @@ class CommandDispatcherTests(unittest.TestCase):
             patch("wheeled_uav.runtime.command_dispatcher._wait_for_datagram") as wait_for_datagram,
         ):
             controller_socket.sendto(json.dumps({"rotor_thrusts": [2.0, 2.0, 2.0, 2.0]}).encode("utf-8"), simulator_socket.getsockname())
+            select.select([simulator_socket], [], [], 5.0)  # the command is queued before the wait starts
             started = time.monotonic()
             applied = dispatcher.wait_for_command(simulator_socket, data, timeout_seconds=5.0)
             elapsed = time.monotonic() - started
