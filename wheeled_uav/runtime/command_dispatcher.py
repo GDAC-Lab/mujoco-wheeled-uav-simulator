@@ -7,7 +7,9 @@ share one code path: single-UAV commands are treated as a one-element batch.
 
 from __future__ import annotations
 
+import math
 import random
+import select
 import socket
 import time
 from dataclasses import dataclass
@@ -48,6 +50,19 @@ class CommandRuntimeStats:
 class PendingCommandDelivery:
     release_time_ns: int
     packet: CommandPacket
+
+
+# Short sleep for waits select() cannot time finely (or at all, for socket
+# stand-ins without a file descriptor).
+_POLL_SECONDS = 0.0002
+
+
+def _wait_for_datagram(sock: socket.socket, timeout_seconds: float) -> None:
+    """Sleep until ``sock`` has a datagram to read or ``timeout_seconds`` pass."""
+    try:
+        select.select([sock], [], [], timeout_seconds)
+    except (TypeError, ValueError, OSError):
+        time.sleep(min(timeout_seconds, _POLL_SECONDS))
 
 
 def apply_thrust_command(data: mujoco.MjData, rotor_thrusts_by_uav: list[list[float]]) -> None:
@@ -273,6 +288,12 @@ class ControlCommandDispatcher:
         apply_body_wrenches(data, self._uav_body_ids, self._last_body_wrenches)
         self._wrench_rows_dirty = self._last_body_wrenches is not None
 
+    def _seconds_until_next_release(self) -> float:
+        if not self._pending_commands:
+            return math.inf
+        next_release_ns = min(pending.release_time_ns for pending in self._pending_commands)
+        return max(0.0, (next_release_ns - time.time_ns()) / 1.0e9)
+
     def wait_for_command(
         self,
         sock: socket.socket,
@@ -283,27 +304,42 @@ class ControlCommandDispatcher:
     ) -> bool:
         """Block until a fresh control command has been applied (lockstep mode).
 
-        While waiting, optionally re-invokes `republish` every second so a
-        late-connecting controller still receives the current state. When a
-        command arrives but is thrown away (dropped by the HIL network model
-        or rejected as stale), `request_again` is invoked at once: the
-        controller has already answered the current state and needs a new
-        sample to answer again. Returns False on timeout.
+        Sleeps on the socket rather than polling it, so a command is applied
+        as soon as its datagram arrives; a command held back by the HIL network
+        model is applied when it falls due. While waiting, optionally
+        re-invokes `republish` every second so a late-connecting controller
+        still receives the current state. When a command arrives but is thrown
+        away (dropped by the HIL network model or rejected as stale),
+        `request_again` is invoked at once: the controller has already answered
+        the current state and needs a new sample to answer again. Returns False
+        on timeout.
         """
         target_count = self.applied_command_count + 1
         start_time = time.monotonic()
+        deadline = start_time + timeout_seconds
         last_republish = start_time
-        while time.monotonic() - start_time < timeout_seconds:
+        while True:
             discarded_before = self.discarded_command_count
             self.apply_next_command(sock, data)
             if self.applied_command_count >= target_count:
                 return True
             now = time.monotonic()
+            if now >= deadline:
+                return False
             if request_again is not None and self.discarded_command_count > discarded_before:
                 request_again()
                 last_republish = now
-            if republish is not None and now - last_republish >= 1.0:
+            elif republish is not None and now - last_republish >= 1.0:
                 republish()
                 last_republish = now
-            time.sleep(0.0002)
-        return False
+            wait_seconds = deadline - now
+            if republish is not None:
+                wait_seconds = min(wait_seconds, last_republish + 1.0 - now)
+            release_seconds = self._seconds_until_next_release()
+            if release_seconds < wait_seconds:
+                # A command held back by the HIL network model falls due first.
+                # select() timeouts are coarse on Windows (a 15.6 ms tick), so
+                # sleep in short steps until it is due.
+                time.sleep(min(release_seconds, _POLL_SECONDS))
+            else:
+                _wait_for_datagram(sock, max(0.0, wait_seconds))

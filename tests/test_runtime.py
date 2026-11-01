@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import socket
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
-from wheeled_uav.protocol import build_packet_metadata
+from wheeled_uav.protocol import build_packet_metadata, create_udp_socket
 from wheeled_uav.runtime.command_dispatcher import ControlCommandDispatcher
 from wheeled_uav.runtime.fidelity import (
     ActuatorModel,
@@ -284,6 +287,62 @@ class CommandDispatcherTests(unittest.TestCase):
 
         self.assertFalse(applied)
         self.assertEqual(requests, [1])
+
+    def _count_receive_attempts(self, dispatcher: ControlCommandDispatcher) -> list[int]:
+        calls: list[int] = []
+        apply_next_command = dispatcher.apply_next_command
+
+        def counting_apply(sock, data) -> None:
+            calls.append(1)
+            apply_next_command(sock, data)
+
+        dispatcher.apply_next_command = counting_apply
+        return calls
+
+    def test_wait_for_command_wakes_when_the_datagram_arrives(self) -> None:
+        dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, FidelityConfig(), num_uavs=1)
+        data = _FakeData(4)
+        attempts = self._count_receive_attempts(dispatcher)
+        command = json.dumps({"rotor_thrusts": [1.0, 2.0, 3.0, 4.0]}).encode("utf-8")
+
+        with create_udp_socket(recv_port=0) as simulator_socket, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as controller_socket:
+            address = simulator_socket.getsockname()
+            sender = threading.Timer(0.05, controller_socket.sendto, args=(command, address))
+            sender.start()
+            started = time.monotonic()
+            applied = dispatcher.wait_for_command(simulator_socket, data, timeout_seconds=5.0)
+            elapsed = time.monotonic() - started
+            sender.join()
+
+        self.assertTrue(applied)
+        np.testing.assert_allclose(data.ctrl, [1.0, 2.0, 3.0, 4.0])
+        self.assertLess(elapsed, 1.0)
+        # One look before the datagram and one after it: the wait sleeps on the socket instead of polling.
+        self.assertLessEqual(len(attempts), 3)
+
+    def test_wait_for_command_wakes_when_a_delayed_command_falls_due(self) -> None:
+        fidelity = FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, command_rx_latency_ms=30.0))
+        dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, fidelity, num_uavs=1)
+        data = _FakeData(4)
+
+        with (
+            create_udp_socket(recv_port=0) as simulator_socket,
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as controller_socket,
+            patch("wheeled_uav.runtime.command_dispatcher._wait_for_datagram") as wait_for_datagram,
+        ):
+            controller_socket.sendto(json.dumps({"rotor_thrusts": [2.0, 2.0, 2.0, 2.0]}).encode("utf-8"), simulator_socket.getsockname())
+            started = time.monotonic()
+            applied = dispatcher.wait_for_command(simulator_socket, data, timeout_seconds=5.0)
+            elapsed = time.monotonic() - started
+
+        # No second datagram arrives: the wait must wake by itself when the held-back command is due.
+        self.assertTrue(applied)
+        np.testing.assert_allclose(data.ctrl, [2.0, 2.0, 2.0, 2.0])
+        self.assertGreaterEqual(elapsed, 0.025)
+        self.assertLess(elapsed, 1.0)
+        # Waiting for a due time is done in short sleeps: select() would round it up to the
+        # Windows timer tick (15.6 ms), delaying every held-back command.
+        wait_for_datagram.assert_not_called()
 
     def test_tracks_sequence_gap_for_fresh_commands(self) -> None:
         dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, FidelityConfig(), num_uavs=1)
