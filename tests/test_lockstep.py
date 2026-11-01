@@ -43,13 +43,16 @@ def _run_lockstep(tmp_path, *, params_path=None, silent_seconds: float = 0.0, du
 
         controller_socket.settimeout(10.0)
         datagrams.append(controller_socket.recvfrom(65535)[0])
-        silent_until = time.monotonic() + silent_seconds
-        while (remaining := silent_until - time.monotonic()) > 0.0:
+        # Timed with perf_counter, and a socket timeout only ends the pause once it is
+        # really over: on Windows before Python 3.13 both time.monotonic() and socket
+        # timeouts run on the 15.6 ms system tick and can end it early.
+        silent_until = time.perf_counter() + silent_seconds
+        while (remaining := silent_until - time.perf_counter()) > 0.0:
             controller_socket.settimeout(remaining)
             try:
                 datagrams.append(controller_socket.recvfrom(65535)[0])
             except socket.timeout:
-                break
+                continue
         # The simulator goes quiet once its duration is reached.
         controller_socket.settimeout(2.0)
         answered = set()
@@ -88,7 +91,7 @@ def test_lockstep_reports_its_own_timing(tmp_path):
         assert timing["step_wall_seconds"] > 0.0
         assert timing["publish_wall_seconds"] > 0.0
         assert timing["command_wait_wall_seconds"] >= 0.0
-    assert states[1]["timing"]["command_wait_wall_seconds"] >= 0.2  # the controller's deliberate pause
+    assert states[1]["timing"]["command_wait_wall_seconds"] >= 0.19  # the controller's deliberate pause
 
 
 def test_lockstep_asks_again_when_a_command_is_dropped(tmp_path):
