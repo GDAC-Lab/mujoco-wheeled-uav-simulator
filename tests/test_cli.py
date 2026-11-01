@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 
 from wheeled_uav.cli import build_cli_parser, main, resolve_params_file
@@ -61,6 +63,14 @@ class CliParserTests(unittest.TestCase):
             "duration_seconds", "record", "hold_until_first_command",
         ):
             self.assertTrue(hasattr(arguments, option_name), f"missing default for {option_name}")
+
+    def test_spawn_radius_zero_is_accepted_and_negative_rejected(self) -> None:
+        # Explicit spawns and single-UAV runs never place a ring, so 0 must pass the CLI.
+        with patch("wheeled_uav.runtime.run_simulation") as run_simulation:
+            self.assertEqual(main(["simulate", "--headless", "--spawn-radius", "0"]), 0)
+        self.assertEqual(run_simulation.call_args.args[0].spawn_radius, 0.0)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(["simulate", "--headless", "--spawn-radius", "-1"])
 
     def test_main_wires_simulate_options_into_request(self) -> None:
         captured_requests = []

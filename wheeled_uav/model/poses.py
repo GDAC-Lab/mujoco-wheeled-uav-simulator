@@ -40,6 +40,8 @@ def build_surface_model_spec(environment: dict[str, Any]) -> SurfaceModelSpec:
 def build_surface_spawn_positions(initial_position: list[float], num_uavs: int, spawn_radius: float) -> list[list[float]]:
     if num_uavs == 1:
         return [[float(initial_position[0]), float(initial_position[1]), float(initial_position[2])]]
+    if spawn_radius <= 0.0:
+        raise ValueError(f"spawn_radius must be positive to place {num_uavs} UAVs on the spawn ring")
 
     positions: list[list[float]] = []
     for uav_index in range(num_uavs):

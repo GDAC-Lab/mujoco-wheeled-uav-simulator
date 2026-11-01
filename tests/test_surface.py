@@ -330,6 +330,12 @@ class SurfaceBehaviorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             build_initial_poses(drone, surface_spec, num_uavs=4, spawn_radius=1.5)
+        # The ring radius is unused by explicit spawns, so 0 is fine there ...
+        self.assertEqual(len(build_initial_poses(drone, surface_spec, num_uavs=3, spawn_radius=0.0)), 3)
+        # ... but a ring of several UAVs needs a positive radius.
+        drone["initial_spawn"] = {"mode": "surface"}
+        with self.assertRaises(ValueError):
+            build_initial_poses(drone, surface_spec, num_uavs=2, spawn_radius=0.0)
 
     def test_build_wall_guide_block_emits_visual_capsules(self) -> None:
         from pathlib import Path
