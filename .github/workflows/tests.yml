@@ -1,0 +1,35 @@
+# The test suite on every push and pull request, on Linux and Windows: the
+# simulator, the UDP protocol, the Python controller and the PX4 HITL bridge
+# (the hil extra). uv takes Python from .python-version and the packages from
+# uv.lock. GNU Octave is installed on Linux so that the MATLAB client tests
+# (tests/test_matlab_*.py) run there too; elsewhere they are skipped.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install GNU Octave (MATLAB client tests)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends octave
+
+      - name: Install (locked, with the hil extra)
+        run: uv sync --frozen --extra hil
+
+      - name: Tests
+        run: uv run --frozen pytest -q
