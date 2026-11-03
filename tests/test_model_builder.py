@@ -442,3 +442,136 @@ def test_vehicle_without_wheels_spawns_on_the_terrain_and_rejects_a_wheel_based_
     drone["initial_spawn"]["center_x"] = 1.8
     (wall_pose,) = build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0, environment=wall)
     assert wall_pose.position[0] == 1.8
+
+
+def _with_part_meshes(params, mesh_dir):
+    """Add wheel and propeller meshes (and hide the primitives they draw) to PARAMS, tetrahedra standing in for CAD."""
+    for name in ("wheel_l.stl", "wheel_r.stl", "prop_cw.stl", "prop_ccw.stl"):
+        _write_tetrahedron_stl(mesh_dir / name)
+    drone = params["drone"]
+    drone["wheels"]["contact"]["group"] = 3
+    drone["wheels"]["mesh"] = {
+        "left": {"file": "wheel_l.stl"},
+        "right": {"file": "wheel_r.stl", "rgba": [0.1, 0.1, 0.1, 1.0]},
+        "pos": [0.0, 0.0, 0.01],
+    }
+    drone["propeller"]["group"] = 3
+    drone["propeller"]["mesh"] = {
+        "cw": {"file": "prop_cw.stl"},
+        "ccw": {"file": "prop_ccw.stl"},
+        "pos": [0.0, 0.0, 0.005],
+        "scale": [0.5, 0.5, 0.5],
+    }
+    return params
+
+
+def test_wheel_and_propeller_meshes_are_placed_on_their_parts(tmp_path):
+    import re
+
+    import mujoco
+    import numpy as np
+
+    from wheeled_uav.model.builder import render_model_xml
+    from wheeled_uav.model.xml_format import format_vector
+
+    params = _with_part_meshes(load_vehicle_params(), tmp_path)
+    xml_path, _, _ = render_model_xml(params, output_path=tmp_path / "generated" / "model.xml", params_dir=tmp_path)
+    rendered = xml_path.read_text(encoding="utf-8")
+
+    for asset in ("drone_cad_wheel_left", "drone_cad_wheel_right", "drone_cad_prop_cw", "drone_cad_prop_ccw"):
+        assert f'<mesh name="{asset}" file="../' in rendered
+    assert 'scale="0.5 0.5 0.5"' in rendered
+    # the primitives the meshes replace are hidden (group 3), not removed: the cylinders collide, the sites carry the thrust
+    assert len(re.findall(r'_wheel_geom" type="cylinder"[^>]* group="3"', rendered)) == 2
+    assert len(re.findall(r'<site name="prop_\w+"[^>]* group="3"/>', rendered)) == 4
+
+    model = mujoco.MjModel.from_xml_path(str(xml_path))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    wheels = params["drone"]["wheels"]
+    for side, sign in (("left", 1.0), ("right", -1.0)):
+        body = model.body(f"{side}_wheel")
+        mesh_id = model.mesh(f"drone_cad_wheel_{side}").id
+        (geom,) = [g for g in range(model.ngeom) if model.geom_bodyid[g] == body.id and model.geom_dataid[g] == mesh_id]
+        assert model.geom_contype[geom] == 0 and model.geom_conaffinity[geom] == 0 and model.geom_group[geom] == 1
+        # pos is the mesh frame in the vehicle frame (0, 0, 0.01); inside the wheel body that is minus its position
+        wheel_position = [0.0, sign * wheels["offset_y"], float(wheels.get("offset_z", 0.0))]
+        local = format_vector([0.0 - wheel_position[0], 0.0 - wheel_position[1], 0.01 - wheel_position[2]])
+        assert f'<geom type="mesh" mesh="drone_cad_wheel_{side}" pos="{local}" contype="0"' in rendered
+    rgba_right = model.geom_rgba[[g for g in range(model.ngeom) if model.geom_dataid[g] == model.mesh("drone_cad_wheel_right").id][0]]
+    assert list(rgba_right) == [np.float32(0.1), np.float32(0.1), np.float32(0.1), np.float32(1.0)]
+
+    # each rotor draws the mesh of its spin direction (spin_sign +1 turns clockwise seen from above), at the rotor
+    # point plus pos, its z along the thrust axis
+    rotor_specs = build_rotor_specs(params)
+    assert {spec.spin_sign for spec in rotor_specs} == {1.0, -1.0}
+    for spec in rotor_specs:
+        asset = "drone_cad_prop_cw" if spec.spin_sign > 0 else "drone_cad_prop_ccw"
+        position = format_vector([spec.position[0], spec.position[1], spec.position[2] + 0.005])
+        line = f'<geom type="mesh" mesh="{asset}" pos="{position}" zaxis="{format_vector(list(spec.thrust_axis))}" contype="0"'
+        assert rendered.count(line) == 1, (spec.suffix, line)
+    assert rendered.count('mesh="drone_cad_prop_cw"') == 2 and rendered.count('mesh="drone_cad_prop_ccw"') == 2
+
+
+def test_visual_part_meshes_leave_the_physics_bit_for_bit_unchanged(tmp_path):
+    import mujoco
+    import numpy as np
+
+    from wheeled_uav.model.builder import render_model_xml
+
+    plain_path, _, _ = render_model_xml(load_vehicle_params(), output_path=tmp_path / "plain" / "model.xml")
+    meshed_params = _with_part_meshes(load_vehicle_params(), tmp_path)
+    meshed_path, _, _ = render_model_xml(meshed_params, output_path=tmp_path / "meshed" / "model.xml", params_dir=tmp_path)
+    plain = mujoco.MjModel.from_xml_path(str(plain_path))
+    meshed = mujoco.MjModel.from_xml_path(str(meshed_path))
+
+    assert meshed.ngeom == plain.ngeom + 2 + 4 and meshed.nmesh == plain.nmesh + 4
+    for field in ("body_mass", "body_inertia", "body_ipos", "body_iquat", "dof_armature", "dof_damping", "actuator_gear"):
+        assert np.array_equal(getattr(plain, field), getattr(meshed, field)), field
+
+    trajectories = []
+    for model in (plain, meshed):
+        data = mujoco.MjData(model)
+        data.ctrl[:] = 2.6   # a little above hover thrust per rotor: it climbs, the wheels leave the floor and spin down
+        for _ in range(3000):
+            mujoco.mj_step(model, data)
+        trajectories.append((data.qpos.copy(), data.qvel.copy(), int(data.ncon)))
+    assert np.array_equal(trajectories[0][0], trajectories[1][0])
+    assert np.array_equal(trajectories[0][1], trajectories[1][1])
+    assert trajectories[0][2] == trajectories[1][2]
+
+
+def test_part_mesh_entries_are_validated(tmp_path):
+    import pytest
+
+    from wheeled_uav.model.builder import render_model_xml
+
+    params = load_vehicle_params()
+    params["drone"]["wheels"]["mesh"] = {"left": {"scale": [1, 1, 1]}}
+    with pytest.raises(ValueError, match=r"drone\.wheels\.mesh\.left\.file"):
+        render_model_xml(params, output_path=tmp_path / "a.xml")
+
+    params = load_vehicle_params()
+    params["drone"]["propeller"]["mesh"] = {"cw": {"file": "p.stl", "quat": [1, 0, 0, 0]}}
+    with pytest.raises(ValueError, match="thrust axis"):
+        render_model_xml(params, output_path=tmp_path / "b.xml")
+
+    params = load_vehicle_params()
+    params["drone"]["wheels"]["mesh"] = {"left": {"file": "w.stl"}, "pos": [0, 0]}
+    with pytest.raises(ValueError, match=r"drone\.wheels\.mesh\.left\.pos must be a list of 3"):
+        render_model_xml(params, output_path=tmp_path / "c.xml")
+
+
+def test_body_mesh_takes_an_optional_placement(tmp_path):
+    _write_tetrahedron_stl(tmp_path / "visual.stl")
+    params = load_vehicle_params()
+    params["drone"]["mesh"] = _fixture_mesh_block("visual.stl")
+
+    replacements, _, _ = build_xml_replacements(params, num_uavs=1, spawn_radius=1.2)
+    assert '<geom type="mesh" mesh="drone_cad" contype=' in replacements["__DRONE_BODY_BLOCK__"]   # unchanged without pos
+
+    params["drone"]["mesh"].update({"pos": [0.0, 0.0, 0.0099], "quat": [1.0, 0.0, 0.0, 0.0], "rgba": [0.2, 0.2, 0.2, 1.0]})
+    replacements, _, _ = build_xml_replacements(params, num_uavs=1, spawn_radius=1.2)
+    body = replacements["__DRONE_BODY_BLOCK__"]
+    assert '<geom type="mesh" mesh="drone_cad" pos="0 0 0.0099" quat="1 0 0 0" contype=' in body
+    assert 'rgba="0.2 0.2 0.2 1"/>' in body

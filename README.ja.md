@@ -533,5 +533,10 @@ MATLAB 側の `simulation_logger` が、以下を `.mat` に保存します。
 
 - `vehicle_params.json`・`wheeled_uav.template.xml` はリポジトリ直下に置く前提です。Python パッケージと MATLAB 実装はそこを基準に参照します。Python 側のパスは環境変数 `WHEELED_UAV_PARAMS_PATH`・`WHEELED_UAV_XML_TEMPLATE_PATH`・`WHEELED_UAV_GENERATED_XML_DIR` でも上書きできます。
 - 機体メッシュは任意です。パラメータファイルの `drone.mesh.file` に STL を指定すると表示されます。相対パスは「パラメータファイルのディレクトリ→テンプレートのディレクトリ」の順に解決されるため、オーバーレイ側リポジトリが自分のメッシュを同梱できます。`drone.mesh` 無しではプリミティブ形状で表示されます。
+- 車輪とプロペラもメッシュで描けます。1 つの CAD の組立から書き出した部品は、組立の座標のまま使えます。`pos` / `quat` はメッシュのファイルの座標系を機体の座標系のどこに置くかで（`drone.mesh` でも任意で指定できる）、`scale`・`rgba`・`contact` は部品ごとにも、まとめても書けます。
+  - `drone.wheels.mesh.left` / `.right`（`{"file": ...}`）: 車輪のボディに付くので、車輪と一緒に回ります。
+  - `drone.propeller.mesh.cw` / `.ccw`: 各ロータに描きます。メッシュの原点（ハブ）をロータの点 + `pos` に置き、z 軸を推力の向きに合わせます。`spin_sign` が 1 のロータは上から見て時計回りで `cw`、-1 は `ccw` です。
+  - これらのメッシュは見た目だけです（`contact` を書かない限り接触せず、質量もない）。あっても無くても物理はビット単位で同じです。
+  - 置き換わるプリミティブは残ります（車輪の円柱は接触を、プロペラの site は推力を担う）。ビューアで隠すには `drone.wheels.contact.group` と `drone.propeller.group` を `3` にします（MuJoCo は既定でグループ 0〜2 を表示。キー `3` で切り替え）。
 - UDP の既定は `127.0.0.1` です。リモート／HIL 構成ではシミュレータ側 `--bind-ip` / `--state-target-ip`、コントローラ側 `--bind-ip` / `--target-ip` で上書きします（上記リモート節参照）。
 - MATLAB 側は起動時に古い `udpport` 残骸を解放するようにしています。

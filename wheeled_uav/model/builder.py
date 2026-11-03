@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -165,9 +165,13 @@ def _build_rotor_site_lines(
     propeller_radius: float,
     propeller_thickness: float,
     prop_rgba: list[float],
+    site_group: int | None = None,
 ) -> list[str]:
+    # The site carries the thrust (actuator transmission), so it always exists; its group only
+    # decides whether the viewer draws the disc (drone.propeller.group, e.g. 3 when a mesh draws the rotor).
+    group_attribute = "" if site_group is None else f' group="{format_scalar(site_group)}"'
     return [
-        f'      <site name="{prefix}prop_{rotor_spec.suffix}" pos="{format_vector(list(rotor_spec.position))}" zaxis="{format_vector(list(rotor_spec.thrust_axis))}" type="cylinder" size="{format_vector([propeller_radius, propeller_thickness])}" rgba="{format_vector(prop_rgba)}"/>'
+        f'      <site name="{prefix}prop_{rotor_spec.suffix}" pos="{format_vector(list(rotor_spec.position))}" zaxis="{format_vector(list(rotor_spec.thrust_axis))}" type="cylinder" size="{format_vector([propeller_radius, propeller_thickness])}" rgba="{format_vector(prop_rgba)}"{group_attribute}/>'
         for rotor_spec in rotor_specs
     ]
 
@@ -185,10 +189,23 @@ def _build_wheel_body_block(drone: dict[str, Any], prefix: str, side_name: str) 
         optional_attributes += f' solimp="{format_vector(wheels["solimp"])}"'
     if wheels.get("condim") is not None:
         optional_attributes += f' condim="{format_scalar(int(wheels["condim"]))}"'
+    if wheels["contact"].get("group") is not None:
+        # Drawing only (MuJoCo groups never change the physics): e.g. 3 hides the cylinder when a mesh draws the wheel.
+        optional_attributes += f' group="{format_scalar(wheels["contact"]["group"])}"'
+    wheel_position = [0.0, wheel_direction * wheel_offset_y, wheel_offset_z(drone)]
+    wheel_mesh = _wheel_mesh_entries(drone).get(side_name)
+    wheel_mesh_lines: list[str] = []
+    if wheel_mesh is not None:
+        # The mesh is placed in the vehicle frame (like drone.mesh) and attached to the wheel body,
+        # which sits at wheel_position without a rotation of its own, so it turns with the wheel.
+        wheel_mesh_lines.append(
+            _visual_geom_line(wheel_mesh, indent="        ", position=[p - w for p, w in zip(wheel_mesh.position, wheel_position, strict=True)])
+        )
     return [
-        f'      <body name="{wheel_body_name}" pos="{format_vector([0.0, wheel_direction * wheel_offset_y, wheel_offset_z(drone)])}">',
+        f'      <body name="{wheel_body_name}" pos="{format_vector(wheel_position)}">',
         f'        <joint name="{wheel_joint_name}" type="hinge" axis="0 1 0" damping="{format_scalar(wheels["joint_damping"])}"/>',
         f'        <geom name="{wheel_geom_name}" type="cylinder" size="{format_vector([wheels["radius"], wheels["thickness"]])}" euler="90 0 0" mass="{format_scalar(wheels["mass"])}" rgba="{format_vector(wheels["rgba"])}" solref="{format_vector(wheels["solref"])}"{optional_attributes} friction="{wheel_friction}" contype="{format_scalar(wheels["contact"]["contype"])}" conaffinity="{format_scalar(wheels["contact"]["conaffinity"])}"/>',
+        *wheel_mesh_lines,
         "      </body>",
     ]
 
@@ -337,10 +354,124 @@ def _mesh_config(params: dict[str, Any]) -> dict[str, Any] | None:
     return mesh
 
 
-def _build_mesh_asset_block(mesh: dict[str, Any] | None, file_reference: str | None) -> str:
-    if mesh is None or file_reference is None:
-        return ""
-    return f'    <mesh name="drone_cad" file="{file_reference}" scale="{format_vector(mesh["scale"])}"/>'
+@dataclass(frozen=True)
+class _VisualMesh:
+    """One visual-only mesh: its asset and how the geom that draws it is placed."""
+
+    asset_name: str
+    file: str
+    scale: tuple[float, float, float]
+    position: tuple[float, float, float]
+    quaternion: tuple[float, float, float, float] | None
+    rgba: tuple[float, float, float, float] | None
+    contype: int
+    conaffinity: int
+    group: int
+
+
+def _vector(section: dict[str, Any], key: str, length: int, where: str, default: Any) -> Any:
+    value = section.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{where}.{key} must be a list of {length} numbers")
+    return tuple(float(component) for component in value)
+
+
+def _visual_mesh(entry: dict[str, Any], shared: dict[str, Any], asset_name: str, where: str) -> _VisualMesh:
+    # Keys of the entry win over the shared ones of its block; a mesh is visual only
+    # (no contact, no mass) unless contact says otherwise, so adding one never changes the physics.
+    def pick(key: str) -> Any:
+        return entry.get(key, shared.get(key))
+
+    if not entry.get("file"):
+        raise ValueError(f"{where}.file is required (the mesh to draw)")
+    merged = {key: pick(key) for key in ("scale", "pos", "quat", "rgba")}
+    contact = {**(shared.get("contact") or {}), **(entry.get("contact") or {})}
+    return _VisualMesh(
+        asset_name=asset_name,
+        file=str(entry["file"]),
+        scale=_vector(merged, "scale", 3, where, (1.0, 1.0, 1.0)),
+        position=_vector(merged, "pos", 3, where, (0.0, 0.0, 0.0)),
+        quaternion=_vector(merged, "quat", 4, where, None),
+        rgba=_vector(merged, "rgba", 4, where, None),
+        contype=int(contact.get("contype", 0)),
+        conaffinity=int(contact.get("conaffinity", 0)),
+        group=int(contact.get("group", 1)),
+    )
+
+
+def _wheel_mesh_entries(drone: dict[str, Any]) -> dict[str, _VisualMesh]:
+    """drone.wheels.mesh: {"left": {"file": ...}, "right": {...}, shared scale/pos/quat/rgba/contact}.
+
+    pos/quat place the mesh file's frame in the vehicle (drone body) frame, as for
+    drone.mesh, so parts exported from one CAD assembly share one pos.
+    """
+    wheels = get_wheels_config(drone)
+    mesh = wheels.get("mesh") if wheels is not None else None
+    if not isinstance(mesh, dict):
+        return {}
+    return {
+        side: _visual_mesh(mesh[side], mesh, f"drone_cad_wheel_{side}", f"drone.wheels.mesh.{side}")
+        for side in ("left", "right")
+        if isinstance(mesh.get(side), dict)
+    }
+
+
+def _propeller_mesh_entries(drone: dict[str, Any]) -> dict[str, _VisualMesh]:
+    """drone.propeller.mesh: {"cw": {"file": ...}, "ccw": {...}, shared scale/pos/rgba/contact}.
+
+    A rotor with spin_sign +1 draws "cw", one with -1 draws "ccw" (spin_sign is the reaction
+    torque about +z, so +1 is a rotor turning clockwise seen from above). The mesh's origin
+    (the hub) goes to the rotor point plus pos (vehicle frame), its z axis along the thrust axis.
+    """
+    mesh = drone.get("propeller", {}).get("mesh")
+    if not isinstance(mesh, dict):
+        return {}
+    entries = {
+        spin: _visual_mesh(mesh[spin], mesh, f"drone_cad_prop_{spin}", f"drone.propeller.mesh.{spin}")
+        for spin in ("cw", "ccw")
+        if isinstance(mesh.get(spin), dict)
+    }
+    for entry in entries.values():
+        if entry.quaternion is not None:
+            raise ValueError("drone.propeller.mesh has no quat: each propeller is oriented by its rotor's thrust axis")
+    return entries
+
+
+def _visual_mesh_assets(params: dict[str, Any]) -> list[tuple[str, str, tuple[float, float, float]]]:
+    """(asset name, file, scale) of every visual mesh, the body mesh first (its asset line is unchanged)."""
+    drone = params["drone"]
+    assets: list[tuple[str, str, tuple[float, float, float]]] = []
+    body_mesh = _mesh_config(params)
+    if body_mesh is not None:
+        assets.append(("drone_cad", str(body_mesh["file"]), tuple(float(value) for value in body_mesh["scale"])))
+    for entry in [*_wheel_mesh_entries(drone).values(), *_propeller_mesh_entries(drone).values()]:
+        assets.append((entry.asset_name, entry.file, entry.scale))
+    return assets
+
+
+def _visual_geom_line(mesh: _VisualMesh, *, indent: str, position: list[float], zaxis: list[float] | None = None) -> str:
+    attributes = [f'type="mesh" mesh="{mesh.asset_name}"', f'pos="{format_vector(position)}"']
+    if zaxis is not None:
+        attributes.append(f'zaxis="{format_vector(zaxis)}"')
+    elif mesh.quaternion is not None:
+        attributes.append(f'quat="{format_vector(list(mesh.quaternion))}"')
+    attributes += [
+        f'contype="{format_scalar(mesh.contype)}"',
+        f'conaffinity="{format_scalar(mesh.conaffinity)}"',
+        'mass="0"',
+        f'group="{format_scalar(mesh.group)}"',
+    ]
+    if mesh.rgba is not None:
+        attributes.append(f'rgba="{format_vector(list(mesh.rgba))}"')
+    return f'{indent}<geom {" ".join(attributes)}/>'
+
+
+def _build_mesh_asset_block(assets: list[tuple[str, str, tuple[float, float, float]]], references: dict[str, str]) -> str:
+    return "\n".join(
+        f'    <mesh name="{name}" file="{references[name]}" scale="{format_vector(list(scale))}"/>' for name, _, scale in assets
+    )
 
 
 def _build_drone_body_block(params: dict[str, Any], rotor_specs: list[RotorSpec], uav_specs: list[UAVModelSpec], initial_poses: list[InitialPoseSpec]) -> str:
@@ -357,15 +488,40 @@ def _build_drone_body_block(params: dict[str, Any], rotor_specs: list[RotorSpec]
         prefix = uav_spec.contact_prefix
         body_box_rgba = _build_uav_color(uav_index, float(drone["body_box"]["rgba"][3]))
         prop_rgba = _build_uav_color(uav_index, 0.55)
-        rotor_site_lines = _build_rotor_site_lines(rotor_specs, prefix, propeller_radius, propeller_thickness, prop_rgba)
+        rotor_site_lines = _build_rotor_site_lines(
+            rotor_specs, prefix, propeller_radius, propeller_thickness, prop_rgba, drone["propeller"].get("group")
+        )
         body_attributes = [f'name="{uav_spec.body_name}"', f'pos="{format_vector(initial_pose.position)}"']
         if initial_pose.quaternion is not None:
             body_attributes.append(f'quat="{format_vector(initial_pose.quaternion)}"')
         mesh_geom_lines: list[str] = []
         if mesh is not None:
-            mesh_geom_lines.append(
-                f'      <geom type="mesh" mesh="drone_cad" contype="{format_scalar(mesh["contact"]["contype"])}" conaffinity="{format_scalar(mesh["contact"]["conaffinity"])}" mass="0" group="{format_scalar(mesh["contact"]["group"])}"/>'
+            # pos/quat/rgba are optional (absent: the mesh file's frame is the body frame, as before 2026-11).
+            placement = "".join(
+                f' {attribute}="{format_vector(list(value))}"'
+                for attribute, value in (
+                    ("pos", _vector(mesh, "pos", 3, "drone.mesh", None)),
+                    ("quat", _vector(mesh, "quat", 4, "drone.mesh", None)),
+                )
+                if value is not None
             )
+            mesh_rgba = _vector(mesh, "rgba", 4, "drone.mesh", None)
+            color = "" if mesh_rgba is None else f' rgba="{format_vector(list(mesh_rgba))}"'
+            mesh_geom_lines.append(
+                f'      <geom type="mesh" mesh="drone_cad"{placement} contype="{format_scalar(mesh["contact"]["contype"])}" conaffinity="{format_scalar(mesh["contact"]["conaffinity"])}" mass="0" group="{format_scalar(mesh["contact"]["group"])}"{color}/>'
+            )
+        # After the body box, so the geoms that collide keep their order (and the solver its contact order).
+        propeller_meshes = _propeller_mesh_entries(drone)
+        propeller_mesh_lines = [
+            _visual_geom_line(
+                propeller_meshes["cw" if rotor_spec.spin_sign > 0.0 else "ccw"],
+                indent="      ",
+                position=[p + o for p, o in zip(rotor_spec.position, propeller_meshes["cw" if rotor_spec.spin_sign > 0.0 else "ccw"].position, strict=True)],
+                zaxis=list(rotor_spec.thrust_axis),
+            )
+            for rotor_spec in rotor_specs
+            if ("cw" if rotor_spec.spin_sign > 0.0 else "ccw") in propeller_meshes
+        ]
         body_blocks.append(
             "\n".join(
                 [
@@ -375,6 +531,7 @@ def _build_drone_body_block(params: dict[str, Any], rotor_specs: list[RotorSpec]
                     *rotor_site_lines,
                     *mesh_geom_lines,
                     f'      <geom name="{prefix}drone_body_box" type="box" size="{format_vector(drone["body_box"]["size"])}" euler="{format_vector(drone["body_box"]["euler"])}" mass="0" group="{format_scalar(drone["body_box"]["contact"]["group"])}" rgba="{format_vector(body_box_rgba)}" contype="{format_scalar(drone["body_box"]["contact"]["contype"])}" conaffinity="{format_scalar(drone["body_box"]["contact"]["conaffinity"])}"/>',
+                    *propeller_mesh_lines,
                     *(_build_wheel_body_block(drone, prefix, "right") if has_wheels else []),
                     *(_build_wheel_body_block(drone, prefix, "left") if has_wheels else []),
                     '    </body>',
@@ -708,7 +865,8 @@ def build_xml_replacements(params: dict[str, Any], num_uavs: int = 1, spawn_radi
         # that still carry their own <mesh> asset line.
         replacements["__MESH_FILE__"] = format_scalar(mesh["file"])
         replacements["__MESH_SCALE__"] = format_vector(mesh["scale"])
-    replacements["__MESH_ASSET_BLOCK__"] = _build_mesh_asset_block(mesh, replacements.get("__MESH_FILE__"))
+    assets = _visual_mesh_assets(params)
+    replacements["__MESH_ASSET_BLOCK__"] = _build_mesh_asset_block(assets, {name: format_scalar(file) for name, file, _ in assets})
     return replacements, surface_spec.evaluator, uav_specs
 
 
@@ -729,16 +887,20 @@ def render_model_xml(
     template_text = resolved_template_path.read_text(encoding="utf-8")
     rendered_text = template_text
     replacements, surface_evaluator, uav_specs = build_xml_replacements(params, num_uavs=num_uavs, spawn_radius=spawn_radius)
-    mesh = _mesh_config(params)
-    if mesh is not None:
-        resolved_reference = _resolve_mesh_file_reference(
-            mesh,
-            resolved_template_path,
-            resolved_output_path,
-            Path(params_dir) if params_dir is not None else None,
-        )
-        replacements["__MESH_FILE__"] = resolved_reference
-        replacements["__MESH_ASSET_BLOCK__"] = _build_mesh_asset_block(mesh, resolved_reference)
+    assets = _visual_mesh_assets(params)
+    if assets:
+        references = {
+            name: _resolve_mesh_file_reference(
+                {"file": file},
+                resolved_template_path,
+                resolved_output_path,
+                Path(params_dir) if params_dir is not None else None,
+            )
+            for name, file, _ in assets
+        }
+        if _mesh_config(params) is not None:
+            replacements["__MESH_FILE__"] = references["drone_cad"]
+        replacements["__MESH_ASSET_BLOCK__"] = _build_mesh_asset_block(assets, references)
     for placeholder, value in replacements.items():
         rendered_text = rendered_text.replace(placeholder, value)
     if "__MESH_FILE__" in rendered_text or "__MESH_SCALE__" in rendered_text:

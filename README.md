@@ -535,5 +535,10 @@ In addition to overall contact summaries, `contact` includes per-group summaries
 
 - `vehicle_params.json` and `wheeled_uav.template.xml` are expected to remain at the repository root. Both the Python package and MATLAB code resolve paths relative to that layout. The Python-side paths can also be overridden via the environment variables `WHEELED_UAV_PARAMS_PATH`, `WHEELED_UAV_XML_TEMPLATE_PATH`, and `WHEELED_UAV_GENERATED_XML_DIR`.
 - A visual mesh is optional: point `drone.mesh.file` in a params file at an STL to render one. Relative mesh paths resolve against the params-file directory first (so overlay repos can ship a mesh next to their params), then against the template directory. Without `drone.mesh` the vehicle renders with its primitive geoms.
+- The wheels and propellers can be drawn from meshes too. Parts exported from one CAD assembly keep their assembly frame: `pos` / `quat` place a mesh file's frame in the vehicle frame (optional for `drone.mesh` as well), and `scale`, `rgba` and `contact` can be given per part or once for the block.
+  - `drone.wheels.mesh.left` / `.right` (`{"file": ...}`): attached to the wheel bodies, so they turn with the wheels.
+  - `drone.propeller.mesh.cw` / `.ccw`: drawn at every rotor, the mesh origin (the hub) at the rotor point plus `pos`, its z axis along the thrust axis. A rotor with `spin_sign` 1 turns clockwise seen from above and takes `cw`, one with -1 takes `ccw`.
+  - Such meshes are visual only (no contact, no mass unless `contact` says otherwise): the physics is bit for bit the same with or without them.
+  - The primitives they replace stay, since the wheel cylinders collide and the propeller sites carry the thrust. Hide them from the viewer with `drone.wheels.contact.group` and `drone.propeller.group` set to `3` (MuJoCo shows groups 0-2 by default; key `3` toggles them).
 - UDP defaults to `127.0.0.1`; for remote/HIL setups override with `--bind-ip` / `--state-target-ip` on the simulator and `--bind-ip` / `--target-ip` on the controller (see the remote controller section above).
 - On startup, the MATLAB side attempts to release stale `udpport` objects from earlier sessions.
