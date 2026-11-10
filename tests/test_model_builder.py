@@ -317,18 +317,18 @@ def test_wheel_offset_z_keeps_the_whole_vehicle_mass_com_and_inertia(tmp_path):
     params = load_vehicle_params()
     drone = params["drone"]
     drone["inertial_reference"] = "total_vehicle"
-    drone["inertia"] = [[0.0117, 0.0, 0.0], [0.0, 0.0052, 0.0], [0.0, 0.0, 0.0133]]
-    drone["mass"] = 1.093
-    drone["wheels"]["mass"] = 0.114
+    drone["inertia"] = [[0.012, 0.0, 0.0], [0.0, 0.006, 0.0], [0.0, 0.0, 0.014]]
+    drone["mass"] = 1.2
+    drone["wheels"]["mass"] = 0.12
     raised = copy.deepcopy(params)
-    raised["drone"]["wheels"]["offset_z"] = 0.0099
+    raised["drone"]["wheels"]["offset_z"] = 0.01
 
     for case in (params, raised):
         mass, com, inertia = _assembled_mass_com_inertia(case, tmp_path, f"z{case['drone']['wheels'].get('offset_z', 0.0)}")
         # The assembled model reproduces drone.mass / drone.inertia about the COM, and the COM stays at the body origin.
-        assert abs(mass - 1.093) < 1e-9
+        assert abs(mass - 1.2) < 1e-9
         assert np.allclose(com, 0.0, atol=1e-9)
-        assert np.allclose(np.diag(inertia), [0.0117, 0.0052, 0.0133], atol=1e-9)
+        assert np.allclose(np.diag(inertia), [0.012, 0.006, 0.014], atol=1e-9)
 
 
 def test_wheel_offset_z_default_builds_the_same_model(tmp_path):
@@ -354,11 +354,11 @@ def test_wall_contact_spawn_places_the_axle_not_the_origin():
     drone["initial_spawn"] = {"mode": "wall_contact", "b2_body": [0.0, 1.0, 0.0], "b3_body": [0.5, 0.0, 0.866]}
     environment = {"wall_position": [2.0, 0.0, 3.0], "wall_size": [0.05, 20.0, 3.0]}
     base = get_wall_contact_initial_pose(drone, environment)
-    drone["wheels"]["offset_z"] = 0.0099
+    drone["wheels"]["offset_z"] = 0.01
     raised = get_wall_contact_initial_pose(drone, environment)
     w, x, y, z = raised.quaternion
     b3 = np.array([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)])
-    axle = np.asarray(raised.position) + 0.0099 * b3
+    axle = np.asarray(raised.position) + 0.01 * b3
     # The axle keeps the wall clearance and height of the default model; only the origin moves.
     assert np.allclose(axle, base.position, atol=1e-12)
     assert abs(axle[0] - _resolve_wall_contact_center_x(environment, drone)) < 1e-12
@@ -570,8 +570,8 @@ def test_body_mesh_takes_an_optional_placement(tmp_path):
     replacements, _, _ = build_xml_replacements(params, num_uavs=1, spawn_radius=1.2)
     assert '<geom type="mesh" mesh="drone_cad" contype=' in replacements["__DRONE_BODY_BLOCK__"]   # unchanged without pos
 
-    params["drone"]["mesh"].update({"pos": [0.0, 0.0, 0.0099], "quat": [1.0, 0.0, 0.0, 0.0], "rgba": [0.2, 0.2, 0.2, 1.0]})
+    params["drone"]["mesh"].update({"pos": [0.0, 0.0, 0.01], "quat": [1.0, 0.0, 0.0, 0.0], "rgba": [0.2, 0.2, 0.2, 1.0]})
     replacements, _, _ = build_xml_replacements(params, num_uavs=1, spawn_radius=1.2)
     body = replacements["__DRONE_BODY_BLOCK__"]
-    assert '<geom type="mesh" mesh="drone_cad" pos="0 0 0.0099" quat="1 0 0 0" contype=' in body
+    assert '<geom type="mesh" mesh="drone_cad" pos="0 0 0.01" quat="1 0 0 0" contype=' in body
     assert 'rgba="0.2 0.2 0.2 1"/>' in body

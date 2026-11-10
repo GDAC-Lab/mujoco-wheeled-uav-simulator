@@ -39,7 +39,7 @@ def _write_calibration(path: Path, sim_params: dict, schema: str = "uav-propulsi
         json.dumps(
             {
                 "schema": schema,
-                "source": {"mat_file": "thrust_20260727_test.mat", "motor": "M2206"},
+                "source": {"mat_file": "thrust_test.mat", "motor": "example"},
                 "sim_params": sim_params,
             }
         ),
@@ -67,7 +67,7 @@ class ApplyCalibrationTests(unittest.TestCase):
             for rotor in params["actuation"]["rotors"]:
                 self.assertEqual(rotor["yaw_moment_ratio"], 0.025)
             self.assertEqual(params["actuator_dynamics"]["motor_tau_ms"], 40.0)
-            self.assertEqual(params["calibration_applied"]["source"]["mat_file"], "thrust_20260727_test.mat")
+            self.assertEqual(params["calibration_applied"]["source"]["mat_file"], "thrust_test.mat")
             self.assertEqual(
                 set(params["calibration_applied"]["applied"]),
                 {"thrust_coefficient", "yaw_moment_ratio", "motor_tau_ms"},
