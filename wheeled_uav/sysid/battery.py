@@ -42,9 +42,13 @@ def fit_battery(log: FlightLog, *, rotor_thrusts: np.ndarray | None = None) -> B
         raise ValueError("fit_battery needs the battery_voltage and battery_current channels")
     voltage = log["battery_voltage"][:, 0]
     current = log["battery_current"][:, 0]
-    used = log.valid_mask() & np.isfinite(voltage) & np.isfinite(current)
+    # A negative current is how a log says "not measured" (PX4 writes -1 without a current sensor).
+    used = log.valid_mask() & np.isfinite(voltage) & np.isfinite(current) & (current >= 0.0)
     if np.count_nonzero(used) < 10:
-        raise ValueError("fit_battery: fewer than 10 usable samples")
+        raise ValueError("fit_battery: fewer than 10 usable samples (valid, with a measured current)")
+    spread = float(np.ptp(current[used]))
+    if spread < 0.05 * max(1.0, float(np.max(current[used]))):
+        raise ValueError(f"fit_battery: the current varies by only {spread:.2f} A, too little to separate the resistance from the open-circuit voltage")
     # Charge drawn so far [Ah], by the trapezoidal rule.
     charge = np.concatenate([[0.0], np.cumsum(0.5 * (current[1:] + current[:-1]) * np.diff(log.time))]) / 3600.0
     design = np.column_stack([np.ones(np.count_nonzero(used)), -current[used], -charge[used]])
@@ -57,6 +61,10 @@ def fit_battery(log: FlightLog, *, rotor_thrusts: np.ndarray | None = None) -> B
         power_design = np.column_stack([np.sum(thrusts[used] ** 1.5, axis=1), np.ones(np.count_nonzero(used))])
         (power_coefficient, auxiliary), *_ = np.linalg.lstsq(power_design, power, rcond=None)
         power_coefficient, auxiliary = float(power_coefficient), float(auxiliary)
+        if power_coefficient <= 0.0:
+            raise ValueError(f"fit_battery: the electrical power does not grow with the thrust (coefficient {power_coefficient:.3g}); check the current channel")
+    if solution[1] <= 0.0:
+        raise ValueError(f"fit_battery: the fitted internal resistance is not positive ({solution[1]:.3g} ohm); check the voltage and current channels")
     return BatteryFit(
         internal_resistance_ohm=float(solution[1]),
         open_circuit_voltage_start_v=float(solution[0]),

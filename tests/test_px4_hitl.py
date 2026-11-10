@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
@@ -218,6 +219,36 @@ def test_bridge_uses_the_configured_actuator_mapping():
     z = [s.pos_ned[2] for s in fake.sensor_samples]
     assert max(z) - min(z) < 0.01           # no thrust: the vehicle stays on the ground despite controls of 0.9
     assert _map_controls_to_ctrl is default_controls_to_ctrl
+
+
+def test_bridge_applies_the_plant_section(tmp_path, capsys):
+    # The plant model is physics: the HITL bridge applies it like the UDP loops (it used to ignore the section).
+    from wheeled_uav.config import load_vehicle_params
+
+    runs = []
+
+    def displacement(plant):
+        """How far the vehicle moved (north, east, up) in 0.3 s under controls of 0.9."""
+        params = load_vehicle_params()
+        if plant is not None:
+            params["plant"] = plant
+        runs.append(plant)
+        params_path = tmp_path / f"vehicle_params_{len(runs)}.json"  # a new name each time: params files are cached by path
+        params_path.write_text(json.dumps(params), encoding="utf-8")
+        request = SimulationRequest(headless=True, duration_seconds=0.3, hold_until_first_command=False, params_path=params_path, generated_xml_dir=tmp_path)
+        fake = FakeLink(controls=[0.9] * 4 + [0.0] * 12)
+        run_bridge(HilConfig(device="FAKE", mode="ev"), request, link=fake)
+        moved = np.array(fake.sensor_samples[-1].pos_ned) - np.array(fake.sensor_samples[0].pos_ned)
+        return moved * [1.0, 1.0, -1.0]
+
+    weak = {"actuation": {"thrust_scale": 0.05}}  # 0.8 N per rotor instead of 16 N
+    assert displacement(None)[2] > 0.1
+    assert displacement({**weak, "sensors": {"pose_delay_s": 0.01}})[2] < 0.01
+    assert "plant.sensors is not used by the PX4 HITL bridge" in capsys.readouterr().out
+    # A steady wind gives a steady drag force (0.9 N here). Added up over the steps instead of
+    # rebuilt each step it would carry the vehicle off by more than a metre.
+    windy = {**weak, "aerodynamics": {"rotor_drag_coefficients_n_s_per_m": [0.3, 0.3, 0.1], "wind_m_per_s": [0.0, 3.0, 0.0]}}
+    assert np.linalg.norm(displacement(windy)) < 0.1
 
 
 def test_bridge_ev_mode_sends_normalized_odometry():

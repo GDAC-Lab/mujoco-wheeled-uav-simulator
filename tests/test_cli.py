@@ -207,3 +207,46 @@ class IdentificationCommandTests(unittest.TestCase):
             self.assertEqual(result["plant"]["correction"]["file"], "result.correction.json")  # next to the result
             prediction = json.loads((folder / "prediction.json").read_text(encoding="utf-8"))
             self.assertLess(prediction["horizons_s"]["0.1"]["position_m"]["median"], 1e-3)
+
+    def test_correction_in_another_folder_and_log_names_without_a_suffix(self) -> None:
+        import json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "true_plant.json").write_text(json.dumps({"actuation": {"delay_s": 0.004, "motor_time_constant_up_s": 0.03}}), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["excite", "--plant", str(folder / "true_plant.json"), "--duration", "3", "--out", str(folder / "flight")]), 0)
+                flight = folder / "flight.npz"
+                self.assertTrue(flight.is_file())  # the name the command reports
+                self.assertIn(f"wrote {flight}", output.getvalue())
+                arguments = ["identify", str(flight), "--correction", "linear", "--out", str(folder / "out" / "result.json")]
+                self.assertEqual(main(arguments + ["--correction-out", str(folder / "corr" / "c.json")]), 0)
+                # The result names the correction from its own folder, which is where --plant looks for it.
+                result = json.loads((folder / "out" / "result.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["plant"]["correction"]["file"], "../corr/c.json")
+                self.assertEqual(main(["predict", str(flight), "--plant", str(folder / "out" / "result.json"), "--horizons", "0.1", "--stride", "1"]), 0)
+
+    def test_plant_argument_replaces_the_params_files_section(self) -> None:
+        import json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        from wheeled_uav.config import load_vehicle_params
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            params = load_vehicle_params()
+            params["plant"] = {"actuation": {"delay_s": 0.02}, "aerodynamics": {"rotor_drag_coefficients_n_s_per_m": [0.5, 0.5, 0.5]}}
+            (folder / "vehicle_params.json").write_text(json.dumps(params), encoding="utf-8")
+            (folder / "plant.json").write_text(json.dumps({"actuation": {"thrust_scale": 0.9}}), encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                arguments = ["excite", "--params-file", str(folder / "vehicle_params.json"), "--plant", str(folder / "plant.json")]
+                self.assertEqual(main(arguments + ["--duration", "1", "--out", str(folder / "flight.npz")]), 0)
+            from wheeled_uav.flightlog import FlightLog
+
+            self.assertEqual(FlightLog.load(folder / "flight.npz").metadata["plant"], {"actuation": {"thrust_scale": 0.9}})

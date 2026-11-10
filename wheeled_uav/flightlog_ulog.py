@@ -10,7 +10,21 @@ FLU body. With ``D = diag(1, -1, -1)``: ``p = D p_ned`` (north, west, up),
 ``R = D R_ned D``, ``w = D w_frd``. Each channel is interpolated from its
 topic's own time stamps onto the time base (commands are held), and grid
 samples inside a gap of a topic (longer than ``max_gap_factor`` times its
-median period) are marked invalid. The motor command becomes a thrust in N
+median period) are marked invalid.
+
+Timing. A FlightLog holds a command from the sample that records it, so the
+time base should contain the instants at which the command changes: by
+default it is the motor command topic when the log has it (else the position
+topic). A time base slower than, or offset from, the command updates records
+each change up to one sample late, and an identified actuation delay comes
+out short by that much. Measurements are placed at ``timestamp_sample``
+(when the data was taken) where the topic has it, commands at ``timestamp``
+(when they were issued); ``"stamp"`` in a channel's mapping names another
+field. When the logger is slower than the controller (it records only some
+of the command updates), set ``"commands": "sampled"``: the log is marked so
+and its commands are interpolated instead of held (wheeled_uav.flightlog).
+
+The motor command becomes a thrust in N
 only with a ``thrust_curve``: ``T = sum_ij c[i][j] u^i V^j`` (V from
 ``battery_status`` or a fixed voltage), the form of a bench calibration
 such as a 2-D polynomial in command and voltage.
@@ -30,8 +44,11 @@ from .flightlog import FlightLog, quaternion_to_rotation, rotation_to_quaternion
 __all__ = ["DEFAULT_MAPPING", "convert_topics", "convert_ulog", "read_ulog_topics"]
 
 DEFAULT_MAPPING: dict[str, Any] = {
-    "time_base": {"topic": "vehicle_local_position"},  # or {"rate_hz": 200.0}
+    # "auto": the rotor_command topic when the log has it, else the position topic. Or a topic name, or {"rate_hz": 200.0}.
+    "time_base": {"topic": "auto"},
     "max_gap_factor": 3.0,
+    # "held": every logged command is a command update. "sampled": the log holds only some of the updates.
+    "commands": "held",
     "position": {"topic": "vehicle_local_position", "fields": ["x", "y", "z"], "frame": "ned"},
     "velocity": {"topic": "vehicle_local_position", "fields": ["vx", "vy", "vz"], "frame": "ned"},
     "quaternion": {"topic": "vehicle_attitude", "fields": ["q[0]", "q[1]", "q[2]", "q[3]"], "frame": "ned_frd"},
@@ -84,11 +101,21 @@ def _merged(mapping: dict[str, Any] | None) -> dict[str, Any]:
     return merged
 
 
-def _columns(table, spec) -> tuple[np.ndarray, np.ndarray] | None:
+def _stamps(topic: dict[str, np.ndarray], *, held: bool, field: str | None = None) -> np.ndarray:
+    """A topic's time stamps [s]: when a measurement was taken, when a command was issued."""
+    if field is None:
+        sampled = topic.get("timestamp_sample")
+        field = "timestamp" if held or sampled is None or not np.all(np.asarray(sampled) > 0) else "timestamp_sample"
+    if field not in topic:
+        raise ValueError(f"time stamp field {field!r} is not in the topic")
+    return np.asarray(topic[field], dtype=np.float64) * 1.0e-6
+
+
+def _columns(table, spec, held: bool = False) -> tuple[np.ndarray, np.ndarray] | None:
     topic = table.get(spec["topic"])
     if topic is None or any(field not in topic for field in spec["fields"]):
         return None
-    stamps = np.asarray(topic["timestamp"], dtype=np.float64) * 1.0e-6
+    stamps = _stamps(topic, held=held, field=spec.get("stamp"))
     values = np.column_stack([np.asarray(topic[field], dtype=float) for field in spec["fields"]]) * float(spec.get("scale", 1.0))
     order = np.argsort(stamps, kind="stable")
     stamps, values = stamps[order], values[order]
@@ -133,6 +160,9 @@ def convert_topics(
 ) -> FlightLog:
     """Convert a topic table into a FlightLog (times in seconds from the first time-base sample)."""
     config = _merged(mapping)
+    if config["commands"] not in ("held", "sampled"):
+        raise ValueError('mapping "commands" must be "held" or "sampled"')
+    held_channels = _HELD if config["commands"] == "held" else ()
     base = config["time_base"]
     if "rate_hz" in base:
         spans = [_columns(table, config[name]) for name in ("position", "quaternion")]
@@ -142,10 +172,15 @@ def convert_topics(
         last = min(span[0][-1] for span in spans)
         grid = np.arange(first, last, 1.0 / float(base["rate_hz"]))
     else:
-        topic = table.get(base["topic"])
+        command_topic = (config.get("rotor_command") or {}).get("topic")
+        name = base["topic"]
+        if name == "auto":
+            name = command_topic if command_topic in table else config["position"]["topic"]
+        topic = table.get(name)
         if topic is None:
-            raise ValueError(f"time-base topic {base['topic']!r} not in the log")
-        grid = np.unique(np.asarray(topic["timestamp"], dtype=np.float64) * 1.0e-6)
+            raise ValueError(f"time-base topic {name!r} not in the log")
+        grid = np.unique(_stamps(topic, held=name == command_topic, field=base.get("stamp")))
+        base = {**base, "topic": name}
     origin = float(grid[0])
     if start_s is not None:
         grid = grid[grid >= origin + start_s]
@@ -160,14 +195,14 @@ def convert_topics(
         spec = config.get(name)
         if spec is None:
             continue
-        columns = _columns(table, spec)
+        columns = _columns(table, spec, name in _HELD)  # stamped as commands either way
         if columns is None:
             if name in ("position", "quaternion"):
                 raise ValueError(f"{name}: topic {spec['topic']!r} or its fields are missing")
             continue
         stamps, values = columns
         values = _to_simulator_frame(name, spec.get("frame"), values)
-        on_grid, channel_valid = _onto(grid, stamps, values, name in _HELD, float(config["max_gap_factor"]))
+        on_grid, channel_valid = _onto(grid, stamps, values, name in held_channels, float(config["max_gap_factor"]))
         if name in ("rotor_command", "rotor_speed"):
             on_grid = on_grid[:, list(config["motor_order"])]
         channels[name] = on_grid
@@ -196,6 +231,8 @@ def convert_topics(
         "frames": "world NWU (from NED), body FLU (from FRD)",
         "time_origin_s": origin,
         "channels_from_topics": present,
+        "time_base": json.loads(json.dumps(base, default=float)),
+        "commands": config["commands"],
         "mapping": json.loads(json.dumps(config, default=float)),
         **(metadata or {}),
     }
@@ -204,9 +241,6 @@ def convert_topics(
 
 def convert_ulog(path: str | Path, mapping: dict[str, Any] | None = None, *, start_s: float | None = None, end_s: float | None = None) -> FlightLog:
     config = _merged(mapping)
-    topics = sorted(
-        {config["time_base"].get("topic", "")} | {spec["topic"] for name, spec in config.items() if isinstance(spec, dict) and "topic" in spec}
-        - {""}
-    )
+    topics = sorted({spec["topic"] for spec in config.values() if isinstance(spec, dict) and "topic" in spec} - {"", "auto"})
     table, info = read_ulog_topics(path, topics)
     return convert_topics(table, mapping, start_s=start_s, end_s=end_s, metadata={"ulog": str(Path(path).name), **info})

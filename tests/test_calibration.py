@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from wheeled_uav.calibration import apply_calibration_file
 from wheeled_uav.config import clear_vehicle_params_cache, load_vehicle_params
 
 
@@ -141,6 +142,22 @@ class ApplyCalibrationTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 load_vehicle_params(params_path=params_path)
+
+    def test_a_plant_merged_in_after_loading_takes_the_bench_time_constant(self) -> None:
+        # Simulator(overrides=...) and --plant add the plant section to params that already went
+        # through the calibration: applying it again must move the value, not leave it in both places.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            params_path = _write_params(directory, {"calibration_file": "calib.json"})
+            _write_calibration(directory / "calib.json", {"motor_tau_ms": 35.0})
+            params = load_vehicle_params(params_path=params_path)
+            self.assertEqual(params["actuator_dynamics"]["motor_tau_ms"], 35.0)
+            params["plant"] = {"actuation": {"delay_s": 0.004}}
+
+            again = apply_calibration_file(params, params_path)
+
+            self.assertEqual(again["plant"]["actuation"]["motor_time_constant_up_s"], 0.035)
+            self.assertNotIn("motor_tau_ms", again["actuator_dynamics"])
 
 
 if __name__ == "__main__":

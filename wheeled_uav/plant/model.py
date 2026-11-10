@@ -97,6 +97,9 @@ class PlantModel:
         self._num_uavs = len(self._vehicles)
         self._rotors_per_uav = len(uav_specs[0].actuator_names)
         self._ctrl_index = np.concatenate([vehicle.actuator_ids for vehicle in self._vehicles])
+        # MuJoCo clamps a limited actuator's control to its range: what the model reports as applied stays inside it.
+        limited = np.asarray(model.actuator_ctrllimited[self._ctrl_index], dtype=bool)
+        self._ctrl_limit = np.where(limited, model.actuator_ctrlrange[self._ctrl_index, 1], np.inf)
         aerodynamics = config.aerodynamics
         self._ground_effect = None if aerodynamics is None else aerodynamics.ground_effect
         self._surface_evaluator = surface_evaluator
@@ -190,13 +193,14 @@ class PlantModel:
             self._saved_ctrl = np.array(data.ctrl, copy=True)
             ratio = None if self.battery is None else self.battery.voltage_ratio()
             thrust = self.actuation.step(data.ctrl[self._ctrl_index], ratio)
+            evaluated = None
+            if self.battery is not None:
+                thrust, evaluated = self._thrust_at_consistent_voltage(thrust)
             if self._ground_effect is not None:
                 self._update_ground_gain(data)
-                data.ctrl[self._ctrl_index] = thrust * self._ground_gain
-            else:
-                data.ctrl[self._ctrl_index] = thrust
+            data.ctrl[self._ctrl_index] = self._applied_thrusts()
             if self.battery is not None:
-                self.battery.update(thrust.reshape(self._num_uavs, self._rotors_per_uav), self._timestep)
+                self.battery.update(thrust.reshape(self._num_uavs, self._rotors_per_uav), self._timestep, evaluated)
         if self.applies_body_forces:
             for uav_index, vehicle in enumerate(self._vehicles):
                 wrench_body = self._body_wrench(data, uav_index)
@@ -206,6 +210,42 @@ class PlantModel:
                 data.xfrc_applied[vehicle.body_id, 0:3] += force_world
                 data.xfrc_applied[vehicle.body_id, 3:6] += torque_world
                 self._last_forces[uav_index] = wrench_body
+
+    def _thrust_at_consistent_voltage(self, thrust: np.ndarray) -> tuple[np.ndarray, tuple]:
+        """The step's thrust at the terminal voltage that this thrust itself produces, and the battery's evaluation of it.
+
+        ``thrust`` was computed with the previous step's voltage. Where the
+        thrust depends on the voltage (at the voltage-dependent limit, or
+        without voltage compensation) that one-step lag can alternate between
+        two states instead of settling, so there the two are solved together:
+        a few substitutions when they converge, else bisection (more voltage
+        allows more thrust, which lowers the voltage, so the consistent value
+        is unique).
+        """
+        battery, actuation = self.battery, self.actuation
+        shape = (self._num_uavs, self._rotors_per_uav)
+        reference = battery.config.reference_voltage_v
+        tolerance = 1.0e-6 * reference
+        used = battery.voltage
+        evaluated = battery.evaluate(thrust.reshape(shape))
+        # The limit is lowest at the lower voltage: one check covers both.
+        if not actuation.depends_on_voltage(np.minimum(used, evaluated[3]) / reference):
+            return thrust, evaluated
+        for _ in range(3):
+            if np.all(np.abs(evaluated[3] - used) <= tolerance):
+                return thrust, evaluated
+            used = evaluated[3]
+            thrust = actuation.deliver(used / reference)
+            evaluated = battery.evaluate(thrust.reshape(shape))
+        low, high = 0.5 * evaluated[1], evaluated[1].copy()
+        for _ in range(30):
+            middle = 0.5 * (low + high)
+            implied = battery.terminal_voltage(actuation.deliver(middle / reference).reshape(shape))
+            above = implied < middle  # the consistent voltage is below the trial value
+            high = np.where(above, middle, high)
+            low = np.where(above, low, middle)
+        thrust = actuation.deliver(0.5 * (low + high) / reference)
+        return thrust, battery.evaluate(thrust.reshape(shape))
 
     def restore(self, data: mujoco.MjData) -> None:
         """After mj_step: put the commanded thrusts back (the command persists between steps)."""
@@ -231,12 +271,16 @@ class PlantModel:
         quadratic = 0.5 * aerodynamics.air_density_kg_per_m3 * np.asarray(aerodynamics.body_drag_area_m2) * np.abs(airspeed_body) * airspeed_body
         return -(linear + quadratic)
 
+    def _applied_thrusts(self) -> np.ndarray:
+        """What the actuators receive: the delivered thrust times the ground-effect gain, within their range."""
+        return np.minimum(self.actuation.delivered * self._ground_gain, self._ctrl_limit)
+
     def delivered_thrusts(self, uav_index: int) -> np.ndarray:
         """Thrust of each rotor of the vehicle as applied in the last step (ground effect included)."""
         if self.actuation is None:
             return np.full(self._rotors_per_uav, np.nan)
         rotors = slice(uav_index * self._rotors_per_uav, (uav_index + 1) * self._rotors_per_uav)
-        return self.actuation.delivered[rotors] * self._ground_gain[rotors]
+        return self._applied_thrusts()[rotors]
 
     def correction_features(self, data: mujoco.MjData, uav_index: int) -> np.ndarray:
         state = self.kinematics(data, uav_index)
@@ -267,7 +311,7 @@ class PlantModel:
         """Commanded and applied thrust of every rotor (actuator log), or None without the rotor model."""
         if self.actuation is None:
             return None
-        return self.actuation.requested.copy(), self.actuation.delivered * self._ground_gain
+        return self.actuation.requested.copy(), self._applied_thrusts()
 
     def snapshot(self) -> list[dict[str, Any]]:
         """Per-vehicle JSON fragment ``plant`` of the state packet."""

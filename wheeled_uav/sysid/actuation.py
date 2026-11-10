@@ -4,13 +4,19 @@ Model (the plant model's, wheeled_uav.plant.actuation): each rotor's
 commanded thrust is delayed by ``d``; ``s = sqrt(T)`` (proportional to the
 rotor speed) follows ``sqrt(command)`` as a first-order lag with ``tau_up``
 or ``tau_down``; the thrust along the body z axis is
-``scale * sum(T_i) - d_z v_bz + offset``. The measurement is the mass times
+``scale * sum(a_i T_i) - d_z v_bz + offset`` with ``a_i`` the z component of
+rotor i's thrust axis (1 for upright rotors). The measurement is the mass times
 the specific force along body z (accelerometer, or the derivative of the
 velocity). Scaling commutes with the lag in ``sqrt(T)``, so for each delay
 and pair of time constants the scale, vertical drag and offset follow by
 linear least squares; the delay and time constants are searched on a grid:
 first a symmetric time constant (an LTI filter, computed by FFT for all
 delays at once), then up and down separately around the best.
+
+The log holds each command from the sample at which it is recorded. When the
+controller updates between samples (a log slower than the controller, or
+sampled off its updates), a change is seen up to one sample late and the
+delay comes out short by that much: log at the instants the command changes.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from ..flightlog import FlightLog
-from .signals import body_velocity, smooth, specific_force_body
+from .signals import body_velocity, derivative_order, smooth, specific_force_body, usable_mask
 
 __all__ = ["ActuationFit", "fit_actuation", "simulate_rotor_thrusts"]
 
@@ -67,8 +73,8 @@ def _lag_symmetric(target: np.ndarray, alpha: float) -> np.ndarray:
     return result + start
 
 
-def _lag_asymmetric(target: np.ndarray, alpha_up: np.ndarray, alpha_down: np.ndarray) -> np.ndarray:
-    """The switching lag for K (alpha_up, alpha_down) pairs at once: returns (n, K) collective thrust."""
+def _lag_asymmetric(target: np.ndarray, alpha_up: np.ndarray, alpha_down: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """The switching lag for K (alpha_up, alpha_down) pairs at once: returns (n, K) thrust along body z."""
     state = np.repeat(target[:1], alpha_up.size, axis=0)  # (K, rotors)
     up = alpha_up[:, None]
     down = alpha_down[:, None]
@@ -76,7 +82,7 @@ def _lag_asymmetric(target: np.ndarray, alpha_up: np.ndarray, alpha_down: np.nda
     for index in range(target.shape[0]):
         goal = target[index][None, :]
         state = state + np.where(goal > state, up, down) * (goal - state)
-        collective[index] = np.sum(state * state, axis=1)
+        collective[index] = (state * state) @ weights
     return collective
 
 
@@ -112,13 +118,28 @@ class _Problem:
     sample_index: np.ndarray  # grid index of each used log sample
     measured: np.ndarray  # mass * specific force along body z at the used samples
     vertical_speed: np.ndarray
-    # How the measurement averages the force: a central difference over +-half grid steps, then the smoothing.
+    axis_weights: np.ndarray  # z component of each rotor's thrust axis
+    # How the measurement averages the force: each central difference over +-half grid steps, then the smoothing.
     stencil_half: int
+    stencil_passes: int
     smoothing: int
 
     def measure_like(self, collective_grid: np.ndarray) -> np.ndarray:
-        """The model's collective force put through the measurement's averaging, at the used samples."""
-        averaged = _box_half_open(collective_grid, self.stencil_half)
+        """The model's collective force put through the measurement's averaging, at the used samples.
+
+        A grid value is the force held over its step, so the difference of two
+        velocity samples is the mean over the grid steps between them (a
+        half-open box). The second difference of a position-only log averages
+        that mean once more, now a function known at the grid instants and
+        linear between them: the trapezoidal mean, i.e. the half-open box
+        centred between a sample and the next.
+        """
+        averaged = collective_grid
+        if self.stencil_passes >= 1:
+            averaged = _box_half_open(averaged, self.stencil_half)
+        if self.stencil_passes >= 2:
+            boxed = _box_half_open(averaged, self.stencil_half)
+            averaged = 0.5 * (boxed + np.concatenate([boxed[1:], boxed[-1:]], axis=0))
         return smooth(averaged, self.smoothing)[self.sample_index]
 
     def regress(self, collective_grid: np.ndarray, fit_vertical_drag: bool) -> tuple[np.ndarray, np.ndarray]:
@@ -138,16 +159,28 @@ class _Problem:
         return sse, coefficients
 
 
-def _problem(log: FlightLog, *, mass: float, gravity: float, rate_hz: float, smooth_s: float, min_collective_fraction: float, edge_s: float) -> _Problem:
+def _axis_weights(rotor_axes: np.ndarray | None, rotors: int) -> np.ndarray:
+    if rotor_axes is None:
+        return np.ones(rotors)
+    axes = np.asarray(rotor_axes, dtype=float)
+    if axes.shape != (rotors, 3):
+        raise ValueError(f"rotor_axes must have shape ({rotors}, 3)")
+    return axes[:, 2] / np.linalg.norm(axes, axis=1)
+
+
+def _problem(
+    log: FlightLog, *, mass: float, gravity: float, rate_hz: float, smooth_s: float, min_collective_fraction: float, edge_s: float, rotor_axes
+) -> _Problem:
     if not log.has("rotor_thrust_command"):
         raise ValueError("fit_actuation needs the rotor_thrust_command channel")
     dt = 1.0 / rate_hz
     grid = np.arange(log.time[0], log.time[-1], dt)
     command = np.maximum(log.sample("rotor_thrust_command", grid), 0.0)
+    weights = _axis_weights(rotor_axes, command.shape[1])
     force = mass * specific_force_body(log, gravity, smooth_s)[:, 2]
     vertical_speed = body_velocity(log)[:, 2]
-    collective = np.sum(log["rotor_thrust_command"], axis=1)
-    used = log.valid_mask()
+    collective = log["rotor_thrust_command"] @ weights
+    used = usable_mask(log, smooth_s)
     used &= (log.time >= log.time[0] + edge_s) & (log.time <= log.time[-1] - edge_s)
     used &= collective >= min_collective_fraction * mass * gravity
     used &= np.isfinite(force)
@@ -163,7 +196,9 @@ def _problem(log: FlightLog, *, mass: float, gravity: float, rate_hz: float, smo
         sample_index=sample_index,
         measured=force[used],
         vertical_speed=vertical_speed[used],
-        stencil_half=0 if log.has("specific_force_body") else int(round(period / dt)),
+        axis_weights=weights,
+        stencil_half=int(round(period / dt)),
+        stencil_passes=derivative_order(log),
         smoothing=max(1, int(round(smoothing_samples * period / dt))) if smoothing_samples > 1 else 1,
     )
 
@@ -181,19 +216,33 @@ def fit_actuation(
     fit_vertical_drag: bool = True,
     min_collective_fraction: float = 0.3,
     edge_s: float = 0.1,
+    rotor_axes: np.ndarray | None = None,
 ) -> ActuationFit:
-    """Fit delay, time constants and thrust scale (see the module docstring)."""
+    """Fit delay, time constants and thrust scale (see the module docstring).
+
+    ``rotor_axes`` (rotors, 3): each rotor's thrust axis in the body frame;
+    without it the rotors are taken as upright, and a tilt would go into the
+    thrust scale.
+    """
     problem = _problem(
-        log, mass=mass, gravity=gravity, rate_hz=rate_hz, smooth_s=smooth_s, min_collective_fraction=min_collective_fraction, edge_s=edge_s
+        log,
+        mass=mass,
+        gravity=gravity,
+        rate_hz=rate_hz,
+        smooth_s=smooth_s,
+        min_collective_fraction=min_collective_fraction,
+        edge_s=edge_s,
+        rotor_axes=rotor_axes,
     )
     dt = problem.dt
+    weights = problem.axis_weights
     taus = np.geomspace(0.004, 0.2, 40) if time_constants_s is None else np.asarray(time_constants_s, dtype=float)
     delays = np.arange(0, int(round(max_delay_s / dt)) + 1)
     # Stage 1: symmetric time constant, every delay (the lag is LTI, so the delay is a shift of its output).
     best = (math.inf, 0, float(taus[0]))
     for tau in taus:
         lagged = _lag_symmetric(problem.sqrt_command, _alpha(float(tau), dt))
-        collective = np.sum(lagged * lagged, axis=1)
+        collective = (lagged * lagged) @ weights
         shifted = np.column_stack([_shift(collective, int(steps)) for steps in delays])
         sse, _ = problem.regress(shifted, fit_vertical_drag)
         k = int(np.argmin(sse))
@@ -212,7 +261,7 @@ def fit_actuation(
             alpha_down = np.array([_alpha(value, dt) for value in pairs[:, 1]])
             best_sse, chosen = math.inf, (delay_steps, tau_up, tau_down)
             for steps in range(max(0, delay_steps - reach), delay_steps + reach + 1):
-                collective = _lag_asymmetric(_shift(problem.sqrt_command, steps), alpha_up, alpha_down)
+                collective = _lag_asymmetric(_shift(problem.sqrt_command, steps), alpha_up, alpha_down, weights)
                 sse, _ = problem.regress(collective, fit_vertical_drag)
                 k = int(np.argmin(sse))
                 if sse[k] < best_sse:
@@ -220,7 +269,7 @@ def fit_actuation(
             delay_steps, tau_up, tau_down = chosen
             spread, reach = math.sqrt(spread), 1
     collective = _lag_asymmetric(
-        _shift(problem.sqrt_command, delay_steps), np.array([_alpha(tau_up, dt)]), np.array([_alpha(tau_down, dt)])
+        _shift(problem.sqrt_command, delay_steps), np.array([_alpha(tau_up, dt)]), np.array([_alpha(tau_down, dt)]), weights
     )
     sse, coefficients = problem.regress(collective, fit_vertical_drag)
     scale, speed_coefficient, offset = coefficients[:, 0]

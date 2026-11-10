@@ -33,8 +33,11 @@ def _table():
     }
 
 
+POSITION_BASE = {"time_base": {"topic": "vehicle_local_position"}}
+
+
 def test_frames_are_nwu_and_flu():
-    log = convert_topics(_table())
+    log = convert_topics(_table(), POSITION_BASE)
     assert log.time[0] == 0.0 and log.sample_period == pytest.approx(0.01)
     assert log["position"][50] == pytest.approx([0.5, -1.0, 1.5])  # NED -> NWU: [x, -y, -z]
     assert log["velocity"][50] == pytest.approx([1.0, -2.0, 1.0])
@@ -46,7 +49,7 @@ def test_frames_are_nwu_and_flu():
 
 
 def test_gaps_mark_samples_invalid_and_motor_order_and_thrust_curve():
-    mapping = {"motor_order": [3, 2, 1, 0], "thrust_curve": {"coefficients": [[0.0, 0.1], [2.0]], "voltage": "battery"}}
+    mapping = {**POSITION_BASE, "motor_order": [3, 2, 1, 0], "thrust_curve": {"coefficients": [[0.0, 0.1], [2.0]], "voltage": "battery"}}
     log = convert_topics(_table(), mapping, start_s=0.5, end_s=1.5)
     assert log.time[0] == pytest.approx(0.5)
     invalid = log.time[~log.valid_mask()]
@@ -65,3 +68,49 @@ def test_missing_required_topics_and_unknown_keys_are_errors():
     with pytest.raises(ValueError, match="unknown mapping key"):
         convert_topics(_table(), {"motor_ordr": [0, 1, 2, 3]})
     assert len(convert_topics(_table(), {"_source": {"vehicle": "x.json"}})) > 0  # keys starting with _ are comments
+
+
+def test_default_time_base_is_the_command_topic():
+    # Commands are held from the sample that records them, so their own instants are the samples.
+    log = convert_topics(_table())
+    assert log.metadata["time_base"] == {"topic": "actuator_motors"}
+    assert log.sample_period == pytest.approx(0.004)
+    assert log["position"][5] == pytest.approx([0.02, -0.04, 1.02])  # interpolated between the 100 Hz samples
+    table = _table()
+    del table["actuator_motors"]
+    log = convert_topics(table)
+    assert log.metadata["time_base"] == {"topic": "vehicle_local_position"} and log.sample_period == pytest.approx(0.01)
+
+
+def test_measurements_sit_at_the_time_they_were_taken():
+    table = _table()
+    position = table["vehicle_local_position"]
+    position["timestamp_sample"] = position["timestamp"] - 2_000  # taken 2 ms before it was published
+    position["timestamp_sample"][0] = 1  # the first stamp is 0 here; a sample time of 0 would read as "not set"
+    log = convert_topics(table)
+    index = 100
+    # x = t at the publication stamps, so at its sample time the value is 2 ms ahead of the log's clock.
+    assert log["position"][index, 0] == pytest.approx(log.time[index] + 0.002)
+    published = convert_topics(table, {"position": {"stamp": "timestamp"}})
+    assert published["position"][index, 0] == pytest.approx(published.time[index])
+    # Commands stay at their publication stamps, the instant they were issued.
+    table["actuator_motors"]["timestamp_sample"] = table["actuator_motors"]["timestamp"] - 1_000
+    table["actuator_motors"]["timestamp_sample"][0] = 1
+    assert convert_topics(table).time[:3] == pytest.approx([0.0, 0.004, 0.008])
+    with pytest.raises(ValueError, match="time stamp field"):
+        convert_topics(table, {"position": {"stamp": "timestamp_smaple"}})
+
+
+def test_sampled_commands_are_marked_and_interpolated():
+    table = _table()
+    table["actuator_motors"]["control[0]"] = table["actuator_motors"]["timestamp"] * 1e-6  # a ramp: u = t
+    held = convert_topics(table, POSITION_BASE)
+    sampled = convert_topics(table, {**POSITION_BASE, "commands": "sampled"})
+    assert held.metadata["commands"] == "held" and sampled.metadata["commands"] == "sampled"
+    # Between two log samples the held command stays, the sampled one follows the ramp.
+    between = np.array([0.505])
+    assert held.sample("rotor_command", between)[0, 0] == pytest.approx(0.5)
+    assert sampled.sample("rotor_command", between)[0, 0] == pytest.approx(0.505)
+    assert sampled.window(0.2, 1.0).metadata["commands"] == "sampled"
+    with pytest.raises(ValueError, match='"commands"'):
+        convert_topics(table, {"commands": "hold"})

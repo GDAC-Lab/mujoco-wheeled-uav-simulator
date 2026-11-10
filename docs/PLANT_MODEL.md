@@ -11,7 +11,9 @@ Everything is opt-in. Without a `plant` section (or with `"enabled": false`)
 the simulator behaves exactly as before; every subsection is off unless
 present. The plant model is physics, so it applies in **every fidelity mode
 and pacing mode** (unlike the HIL-only `actuator_dynamics` and
-`sensor_fidelity`, which it replaces; combining both is refused). Its delays
+`sensor_fidelity`, which it replaces; combining both is refused). The PX4
+HITL bridge applies it as well, except `plant.sensors`: the board's sensors
+are made from the true state. Its delays
 are **simulation time**: deterministic and the same in `realtime`,
 `accelerated` and `lockstep`, unlike the wall-clock delays of
 `network_fidelity` ([TIMING.md](TIMING.md)).
@@ -75,6 +77,9 @@ charge ← charge − I dt / (capacity · 3.6 C/mAh)
 ```
 
 Past the pack's maximum power (`V_oc² / 4R`) the voltage stays at `V_oc / 2`.
+Where the thrust depends on the voltage (a rotor at its limit, or no voltage
+compensation) the two are solved together within the step, so they settle
+even without a rotor lag.
 The maximum rotor thrust scales with `(V / reference_voltage_v)²`. With
 `voltage_compensation: true` (default) the command is the thrust itself (a
 flight controller that compensates for the voltage, as PX4 does with a
@@ -138,6 +143,10 @@ to the params file.
 
 ## Sensors (`plant.sensors`)
 
+The delays count from the state the simulator publishes without this
+section, which is one physics step behind the integrated state; a delay
+identified from measured states includes that step.
+
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `pose_delay_s` | Age of position and attitude (motion capture → estimator) | `0` |
@@ -184,7 +193,9 @@ carry the measured state but not the `plant` block.
 }
 ```
 
-Parameters are named by their dotted path (list entries by index).
+Parameters are named by their dotted path (list entries by index); a path
+that does not exist is an error, except under `plant`, whose own parser
+checks the keys.
 `uniform`, `normal` and `choice` set the value; `scale_uniform` and
 `scale_normal: std` multiply the present value by one factor (every number
 of a matrix by the same factor, unless `"per_element": true`); `clip` bounds

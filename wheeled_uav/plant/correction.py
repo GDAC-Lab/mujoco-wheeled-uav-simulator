@@ -137,11 +137,20 @@ class CorrectionModel:
     # -- files ------------------------------------------------------------
     @classmethod
     def from_dict(cls, document: dict[str, Any]) -> CorrectionModel:
+        if not isinstance(document, dict):
+            raise ValueError("correction: the file must hold a JSON object")
         if document.get("format") != CORRECTION_FORMAT:
             raise ValueError(f'correction: "format" must be "{CORRECTION_FORMAT}", got {document.get("format")!r}')
         kind = document.get("kind")
         if kind not in ("linear", "knn"):
             raise ValueError('correction: "kind" must be "linear" or "knn"')
+        for name in ("features", "outputs"):
+            names = document.get(name, [])
+            if not isinstance(names, list) or not all(isinstance(entry, str) for entry in names):
+                raise ValueError(f'correction: "{name}" must be a list of names')
+        for name in (kind, "provenance"):
+            if not isinstance(document.get(name, {}), dict):
+                raise ValueError(f'correction: "{name}" must be an object')
         features = tuple(document.get("features", ()))
         outputs = tuple(document.get("outputs", ()))
         n_features, n_outputs = len(features), len(outputs)

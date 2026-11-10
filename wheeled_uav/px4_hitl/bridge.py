@@ -21,8 +21,9 @@ import numpy as np
 from ..config import build_aerodynamics_config
 from ..timing import StepPacer, high_resolution_os_timer
 from ..runtime.aerodynamics import AerodynamicsModel
+from ..plant import PlantModel
 from ..runtime.fidelity import ActuatorModel
-from ..runtime.scene import SimulationRequest, load_simulation_scene
+from ..runtime.scene import SimulationRequest, load_simulation_scene, resolve_seed
 from .link import MAV_CMD_COMPONENT_ARM_DISARM, MAV_CMD_NAV_TAKEOFF, MAV_RESULT_TEXT
 from .sensors import HilSensorExtractor, gps_from_ned
 
@@ -260,6 +261,26 @@ def run_bridge(
     aerodynamics_model = AerodynamicsModel(
         model, scene.params, build_aerodynamics_config(scene.params), scene.uav_specs, scene.sensor_layouts
     )
+    # The plant section (rotor delay and lag, thrust scale, battery, drag, correction) acts on the
+    # physics here as in the UDP loops. Its sensors subsection shapes the UDP state packet, which
+    # this bridge does not send: the board's sensors come from the true state.
+    plant_model = None
+    if scene.plant is not None:
+        plant_model = PlantModel(
+            model,
+            scene.params,
+            scene.plant,
+            scene.uav_specs,
+            scene.sensor_layouts,
+            seed=resolve_seed(scene),
+            surface_evaluator=scene.surface_evaluator,
+        )
+        if scene.plant.sensors is not None:
+            print("plant.sensors is not used by the PX4 HITL bridge (HIL_SENSOR, HIL_GPS and ODOMETRY come from the true state)")
+    # Both models add to the vehicle's xfrc_applied row; nothing else writes it here, so it is
+    # cleared before each step while either is active (otherwise the forces would add up).
+    vehicle_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, scene.uav_specs[0].body_name)
+    rebuild_body_forces = aerodynamics_model.active or (plant_model is not None and plant_model.applies_body_forces)
     extractor = HilSensorExtractor(
         model,
         scene.uav_specs[0].sensor_names,
@@ -320,9 +341,15 @@ def run_bridge(
                 else:
                     data.ctrl[:] = 0.0
 
+                if rebuild_body_forces:
+                    data.xfrc_applied[vehicle_body_id] = 0.0
                 actuator_model.apply(data)
+                if plant_model is not None:
+                    plant_model.apply(data)
                 aerodynamics_model.apply(data)
                 mujoco.mj_step(model, data)
+                if plant_model is not None:
+                    plant_model.restore(data)
                 if not fresh and stats.controls_applied_steps == 0:
                     # 最初の指令が届くまでスポーン時の状態（姿勢と初速度）で保持（UDP ループと同じ方針）
                     data.qpos[:] = initial_qpos

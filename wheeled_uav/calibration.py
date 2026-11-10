@@ -123,6 +123,13 @@ def apply_calibration_file(params: dict[str, Any], params_path: Path) -> dict[st
             raise ValueError("calibration sim_params.motor_tau_ms must be >= 0")
         plant_actuation = _enabled_plant_actuation(params)
         if plant_actuation is not None:
+            # Params that went through here before the plant section was merged in carry the bench
+            # value in actuator_dynamics: take it back, or both would model the rotors.
+            earlier = params.get("calibration_applied")
+            earlier_value = earlier.get("applied", {}).get("motor_tau_ms") if isinstance(earlier, dict) else None
+            actuator_section = params.get("actuator_dynamics")
+            if earlier_value is not None and isinstance(actuator_section, dict) and actuator_section.get("motor_tau_ms") == earlier_value:
+                del actuator_section["motor_tau_ms"]
             # The plant model's rotors (every fidelity mode) take the bench value, unless the
             # plant section sets its own time constant (an identified value, say), which wins.
             if "motor_time_constant_up_s" not in plant_actuation:

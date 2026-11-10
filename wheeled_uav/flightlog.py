@@ -30,7 +30,11 @@ valid                       1       1 where the sample is trustworthy (0: a sour
 
 Commands are zero-order held between samples (``rotor_thrust_command[k]``
 acts from ``time[k]`` to ``time[k+1]``); measurements are interpolated
-linearly.
+linearly. That is exact when every sample is a command update. A log that
+only samples a faster command stream (a logger slower than the controller)
+says so with ``metadata["commands"] = "sampled"``: its commands are then
+interpolated linearly too, since holding them would place every change half
+a sample late on average.
 """
 
 from __future__ import annotations
@@ -61,6 +65,8 @@ CHANNEL_WIDTHS = {
 REQUIRED_CHANNELS = ("position", "quaternion")
 # Held between samples instead of interpolated.
 HELD_CHANNELS = ("rotor_thrust_command", "rotor_command", "valid")
+COMMAND_CHANNELS = ("rotor_thrust_command", "rotor_command")
+COMMAND_SEMANTICS = ("held", "sampled")
 
 
 def quaternion_to_rotation(quaternion: np.ndarray) -> np.ndarray:
@@ -122,6 +128,8 @@ class FlightLog:
         missing = [name for name in REQUIRED_CHANNELS if name not in checked]
         if missing:
             raise ValueError(f"flight log: missing channel(s) {', '.join(missing)}")
+        if self.metadata.get("commands", "held") not in COMMAND_SEMANTICS:
+            raise ValueError(f'flight log: metadata "commands" must be one of {", ".join(COMMAND_SEMANTICS)}')
         norms = np.linalg.norm(checked["quaternion"], axis=1, keepdims=True)
         if np.any(np.abs(norms - 1.0) > 1.0e-12):
             checked["quaternion"] = checked["quaternion"] / norms
@@ -151,15 +159,20 @@ class FlightLog:
         return self.channels["valid"][:, 0] > 0.5
 
     # -- files --------------------------------------------------------------
-    def save(self, path: str | Path) -> None:
+    def save(self, path: str | Path) -> Path:
+        """Write the log and return the file's path (``.npz`` is appended when the name lacks it)."""
+        path = Path(path)
+        if path.suffix != ".npz":
+            path = path.with_name(path.name + ".npz")
         arrays = {f"channel_{name}": values for name, values in self.channels.items()}
         np.savez_compressed(
-            Path(path),
+            path,
             format=np.array(FLIGHTLOG_FORMAT),
             time=self.time,
             metadata=np.array(json.dumps(self.metadata)),
             **arrays,
         )
+        return path
 
     @classmethod
     def load(cls, path: str | Path) -> FlightLog:
@@ -179,10 +192,13 @@ class FlightLog:
         return FlightLog(self.time[keep], {name: values[keep] for name, values in self.channels.items()}, dict(self.metadata))
 
     def sample(self, name: str, times: np.ndarray) -> np.ndarray:
-        """Channel ``name`` at ``times``: held for commands and validity, linear for measurements, normalized quaternions."""
+        """Channel ``name`` at ``times``: held for commands and validity, linear for measurements, normalized quaternions.
+
+        Commands of a log marked ``"commands": "sampled"`` are interpolated linearly (module docstring).
+        """
         times = np.asarray(times, dtype=float)
         values = self.channels[name]
-        if name in HELD_CHANNELS:
+        if name in HELD_CHANNELS and not (name in COMMAND_CHANNELS and self.metadata.get("commands") == "sampled"):
             # A sample at (almost) the instant a command changes gets the new command: time stamps
             # that are sums of steps differ from computed instants by rounding.
             tolerance = 1.0e-6 * self.sample_period

@@ -222,21 +222,25 @@ def _plant_overrides(plant_path: str | None) -> dict | None:
 
 def _run_identification_command(command: str, arguments: argparse.Namespace) -> int:
     import json
+    import os
     from pathlib import Path
 
-    from .config import load_vehicle_params, merge_params
+    from .config import load_vehicle_params
     from .flightlog import FlightLog
 
     params_path = resolve_params_file(arguments.params_file, arguments.preset)
-    params = merge_params(load_vehicle_params(params_path), _plant_overrides(arguments.plant))
+    params = load_vehicle_params(params_path)
+    plant_overrides = _plant_overrides(arguments.plant)
+    if plant_overrides is not None:
+        params["plant"] = plant_overrides["plant"]  # instead of the file's section, not merged into it
     if command == "excite":
         from .sim import Simulator
         from .sysid import excitation_flight
 
         with Simulator(params_path, params=params, seed=arguments.seed) as sim:
             log = excitation_flight(sim, duration_s=arguments.duration, seed=arguments.seed, measured=arguments.measured)
-        log.save(arguments.out)
-        print(f"wrote {arguments.out}: {len(log)} samples over {log.time[-1] - log.time[0]:.1f} s")
+        written = log.save(arguments.out)
+        print(f"wrote {written}: {len(log)} samples over {log.time[-1] - log.time[0]:.1f} s")
         return 0
     log = FlightLog.load(arguments.log)
     if command == "identify":
@@ -246,6 +250,9 @@ def _run_identification_command(command: str, arguments: argparse.Namespace) -> 
         correction_path = arguments.correction_out
         if arguments.correction is not None and correction_path is None:
             correction_path = str(Path(arguments.out).with_name(Path(arguments.out).stem + ".correction.json")) if arguments.out else "correction.json"
+        for written in (arguments.out, correction_path if arguments.correction is not None else None):
+            if written:
+                Path(written).resolve().parent.mkdir(parents=True, exist_ok=True)
         result = identify(
             log,
             params,
@@ -261,11 +268,17 @@ def _run_identification_command(command: str, arguments: argparse.Namespace) -> 
 
         with Simulator(params_path, params=params) as sim:
             result = prediction_error(log, sim, horizons_s=arguments.horizons, stride_s=arguments.stride)
-    if command == "identify" and arguments.out and "correction" in result["plant"]:
-        # Name the correction relative to the result, so the two can move together (see --plant).
+    if command == "identify" and "correction" in result["plant"]:
+        # --plant reads a relative correction file from the result's folder: name it from there,
+        # so the two can move together (absolute without --out, or on another drive).
         correction_file = Path(result["plant"]["correction"]["file"]).resolve()
-        if correction_file.parent == Path(arguments.out).resolve().parent:
-            result["plant"]["correction"]["file"] = correction_file.name
+        name = str(correction_file)
+        if arguments.out:
+            try:
+                name = Path(os.path.relpath(correction_file, Path(arguments.out).resolve().parent)).as_posix()
+            except ValueError:
+                pass
+        result["plant"]["correction"]["file"] = name
     text = json.dumps(result, indent=1)
     if arguments.out:
         Path(arguments.out).write_text(text + "\n", encoding="utf-8")
@@ -365,9 +378,9 @@ def main(argv: list[str] | None = None) -> int:
         from .flightlog_ulog import convert_ulog
 
         log = convert_ulog(arguments.ulog, _load_json(arguments.mapping) if arguments.mapping else None, start_s=arguments.start, end_s=arguments.end)
-        log.save(arguments.out)
+        written = log.save(arguments.out)
         valid = log.valid_mask()
-        print(f"wrote {arguments.out}: {len(log)} samples over {log.time[-1] - log.time[0]:.1f} s, {int((~valid).sum())} invalid (topic gaps); channels: {', '.join(log.channels)}")
+        print(f"wrote {written}: {len(log)} samples over {log.time[-1] - log.time[0]:.1f} s, {int((~valid).sum())} invalid (topic gaps); channels: {', '.join(log.channels)}")
         return 0
 
     parser.error(f"Unsupported command: {command}")

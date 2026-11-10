@@ -8,9 +8,11 @@ from ..flightlog import FlightLog
 
 __all__ = [
     "body_velocity",
+    "derivative_order",
     "estimate_delay",
     "smooth",
     "specific_force_body",
+    "usable_mask",
     "world_acceleration",
 ]
 
@@ -28,6 +30,33 @@ def smooth(values: np.ndarray, window: int) -> np.ndarray:
     high = np.clip(index + half + 1, 0, flat.shape[0])
     result = (cumulative[high] - cumulative[low]) / (high - low)[:, None]
     return result.reshape(values.shape)
+
+
+def derivative_order(log: FlightLog) -> int:
+    """How many central differences the specific force takes: 0 (accelerometer), 1 (velocity) or 2 (position)."""
+    if log.has("specific_force_body"):
+        return 0
+    return 1 if log.has("velocity") else 2
+
+
+def usable_mask(log: FlightLog, smooth_s: float = 0.0) -> np.ndarray:
+    """Valid samples whose specific force does not touch an invalid sample.
+
+    Each central difference reaches one sample to either side, and the
+    smoothing half its window: a sample next to a dropout (a held pose, a gap)
+    would otherwise carry the dropout's jump into the fit.
+    """
+    valid = log.valid_mask()
+    window = int(round(smooth_s / log.sample_period)) if smooth_s > 0.0 else 0
+    reach = derivative_order(log) + (window // 2 if window > 1 else 0)
+    if reach == 0 or valid.all():
+        return valid
+    invalid = ~valid
+    spread = invalid.copy()
+    for shift in range(1, reach + 1):
+        spread[shift:] |= invalid[:-shift]
+        spread[:-shift] |= invalid[shift:]
+    return ~spread
 
 
 def world_acceleration(log: FlightLog, smooth_s: float = 0.0) -> np.ndarray:

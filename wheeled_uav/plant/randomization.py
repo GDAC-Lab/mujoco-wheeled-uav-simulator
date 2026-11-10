@@ -57,7 +57,8 @@ def _parent(params: dict[str, Any], path: str) -> tuple[Any, str | int]:
     for depth, part in enumerate(parts[:-1]):
         if isinstance(node, dict) and part not in node and parts[0] == "plant" and isinstance(part, str):
             # Missing objects under plant are created (its parser rejects misspelt keys);
-            # elsewhere a missing parent is an error, so a typo cannot pass unnoticed.
+            # elsewhere a missing name is an error (here and for the last name, in
+            # apply_randomization), so a typo cannot pass unnoticed.
             node[part] = {}
         try:
             node = node[part]
@@ -129,7 +130,10 @@ def _draw(spec: dict[str, Any], present: Any, has_present: bool, path: str, rng:
     base = _numbers(present, path)
     shape = base.shape if per_element else ()
     if kind == "scale_uniform":
-        if not isinstance(argument, list) or len(argument) != 2 or float(argument[1]) < float(argument[0]):
+        numbers = isinstance(argument, list) and len(argument) == 2 and all(
+            isinstance(bound, (int, float)) and not isinstance(bound, bool) for bound in argument
+        )
+        if not numbers or argument[1] < argument[0]:
             raise ValueError(f"randomization: scale_uniform of {path!r} must be [low, high] with low <= high")
         factor = rng.uniform(float(argument[0]), float(argument[1]), size=shape)
     else:
@@ -171,6 +175,9 @@ def apply_randomization(params: dict[str, Any], *, seed: int) -> tuple[dict[str,
             if not isinstance(key, str):
                 key = str(key)
             has_present, present = key in parent, parent.get(key)
+            if not has_present and _split(path)[0] != "plant":
+                # Under plant a new key is checked by its parser; anywhere else it would be a silent no-op.
+                raise ValueError(f"randomization: {path!r} does not exist (known here: {', '.join(sorted(map(str, parent))) or 'nothing'})")
         rng = np.random.default_rng(np.random.SeedSequence([int(seed), RANDOMIZATION_STREAM, zlib.crc32(path.encode("utf-8"))]))
         value = _draw(spec, present, has_present and present is not None, path, rng)
         parent[key] = value

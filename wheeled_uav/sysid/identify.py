@@ -42,7 +42,12 @@ def identify(
     rotor_axes = np.array([spec.thrust_axis for spec in build_rotor_specs(params)], dtype=float)
     result: dict[str, Any] = {
         "format": IDENTIFICATION_FORMAT,
-        "log": {"samples": len(log), "duration_s": float(log.time[-1] - log.time[0]), "source": log.metadata.get("source")},
+        "log": {
+            "samples": len(log),
+            "duration_s": float(log.time[-1] - log.time[0]),
+            "source": log.metadata.get("source"),
+            "commands": log.metadata.get("commands", "held"),
+        },
         "mass_kg": mass,
         "fits": {},
         "plant": {},
@@ -51,7 +56,7 @@ def identify(
     plant: dict[str, Any] = result["plant"]
     actuation = None
     if log.has("rotor_thrust_command"):
-        actuation = fit_actuation(log, mass=mass, gravity=gravity, max_delay_s=max_delay_s, smooth_s=smooth_s)
+        actuation = fit_actuation(log, mass=mass, gravity=gravity, max_delay_s=max_delay_s, smooth_s=smooth_s, rotor_axes=rotor_axes)
         result["fits"]["actuation"] = actuation.as_dict()
         plant["actuation"] = actuation.plant_actuation()
         thrusts = simulate_rotor_thrusts(log, actuation)
@@ -72,9 +77,13 @@ def identify(
         aerodynamics["body_drag_area_m2"] = [round(drag.body_drag_area_m2[0], 8), round(drag.body_drag_area_m2[1], 8), 0.0]
     plant["aerodynamics"] = aerodynamics
     if log.has("battery_voltage") and log.has("battery_current"):
-        battery = fit_battery(log, rotor_thrusts=thrusts)
-        result["fits"]["battery"] = battery.as_dict()
-        plant["battery"] = battery.plant_battery()
+        try:
+            battery = fit_battery(log, rotor_thrusts=thrusts)
+        except ValueError as error:
+            result["notes"].append(f"battery not identified: {error}")
+        else:
+            result["fits"]["battery"] = battery.as_dict()
+            plant["battery"] = battery.plant_battery()
     if correction is not None:
         if actuation is None:
             raise ValueError("a correction needs the actuation fit (rotor_thrust_command)")
@@ -82,7 +91,7 @@ def identify(
             raise ValueError("give correction_path to save the correction")
         model = fit_correction(
             log, mass=mass, gravity=gravity, actuation=actuation, aerodynamics=aerodynamics, rotor_axes=rotor_axes, kind=correction,
-            provenance={"log_source": log.metadata.get("source")},
+            provenance={"log_source": log.metadata.get("source")}, smooth_s=smooth_s,
         )
         model.save(correction_path)
         plant["correction"] = {"file": str(correction_path)}

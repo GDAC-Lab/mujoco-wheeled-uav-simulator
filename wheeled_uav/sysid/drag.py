@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from ..flightlog import FlightLog
-from .signals import body_velocity, specific_force_body
+from .signals import body_velocity, derivative_order, specific_force_body, usable_mask
 
 __all__ = ["DragFit", "fit_drag"]
 
@@ -60,10 +60,10 @@ def fit_drag(
     if thrust_force_body is not None:
         force = force - np.asarray(thrust_force_body, dtype=float)
     airspeed = body_velocity(log, wind_m_per_s)
-    if not log.has("specific_force_body"):
-        # The derivative averages the force over +-1 sample: average the airspeed the same way.
+    # Each central difference averages the force over +-1 sample: average the airspeed the same way.
+    for _ in range(derivative_order(log)):
         airspeed = 0.5 * airspeed + 0.25 * (np.roll(airspeed, 1, axis=0) + np.roll(airspeed, -1, axis=0))
-    used = log.valid_mask() & (log.time >= log.time[0] + edge_s) & (log.time <= log.time[-1] - edge_s)
+    used = usable_mask(log, smooth_s) & (log.time >= log.time[0] + edge_s) & (log.time <= log.time[-1] - edge_s)
     used &= np.all(np.isfinite(force), axis=1)
     if np.count_nonzero(used) < 20:
         raise ValueError("fit_drag: fewer than 20 usable samples")

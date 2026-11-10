@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import math
 
@@ -142,6 +141,25 @@ def test_without_voltage_compensation_thrust_scales_with_voltage_squared():
     assert compensated.step(np.full(4, 9.0), ratio) == pytest.approx(np.full(4, 8.0 * ratio[0] ** 2))  # sagging maximum
 
 
+def test_battery_at_its_power_limit_settles_without_rotor_lag():
+    # No rotor lag: the voltage sets the thrust limit and the thrust sets the voltage within one step.
+    # Solved together they settle; taking the previous step's voltage they would alternate between two states.
+    with Simulator(overrides=_merge(FLOATING, {"plant": {"battery": {}}})) as sim:
+        sim.reset()
+        voltages, thrusts = [], []
+        for _ in range(12):
+            state = sim.step([14.0] * 4, steps=1)
+            voltages.append(state["plant"]["battery_voltage_v"])
+            thrusts.append(sim.runtime.plant.delivered_thrusts(0).copy())
+        plant = sim.runtime.plant
+        assert np.ptp(voltages) < 0.02 and np.ptp(np.array(thrusts)[:, 0]) < 0.02
+        assert plant.actuation.saturated.all()
+        # The thrust is the limit at that voltage, and the voltage is the pack's under that thrust.
+        ratio = voltages[-1] / plant.battery.config.reference_voltage_v
+        assert thrusts[-1] == pytest.approx(np.full(4, plant.actuation.max_thrust * ratio**2), rel=1e-6)
+        assert plant.battery.terminal_voltage(thrusts[-1][None, :])[0] == pytest.approx(voltages[-1], abs=1e-3)
+
+
 def test_battery_sags_and_drains_in_flight():
     plant = {"plant": {"battery": {"capacity_mah": 100.0, "internal_resistance_ohm": 0.05}}}
     with Simulator(overrides=_merge(FLOATING, plant)) as sim:
@@ -210,6 +228,11 @@ def test_ground_effect_raises_thrust_near_the_ground():
         sim.reset()
         sim.step([2.0] * 4, steps=1)
         assert sim.runtime.plant.delivered_thrusts(0) == pytest.approx(np.full(4, 4.0))  # capped at max_gain
+        # What is reported as applied stays within the actuator's range, as MuJoCo clamps it there.
+        limit = load_vehicle_params()["actuation"]["max_rotor_thrust"]
+        sim.step([limit] * 4, steps=1)
+        assert sim.runtime.plant.delivered_thrusts(0) == pytest.approx(np.full(4, limit))
+        assert sim.runtime.plant.requested_and_applied()[1] == pytest.approx(np.full(4, limit))
 
 
 # -- correction -------------------------------------------------------------------------------------
@@ -236,6 +259,15 @@ def test_linear_and_knn_corrections_fit_and_round_trip(tmp_path):
         assert loaded.evaluate(full) == pytest.approx(model.evaluate(full))
     full[[0, 1, 10]] = [100.0, 0.0, 0.0]  # far outside the data: clipped to the range seen
     assert linear.evaluate(full)[0] == pytest.approx(np.max(targets[:, 0]))
+
+
+def test_malformed_correction_files_are_value_errors(tmp_path):
+    model = fit_linear_correction(np.random.default_rng(0).normal(size=(20, 2)), np.zeros((20, 1)), FEATURE_NAMES[:2], ("force_body_x",))
+    good = model.to_dict()
+    for broken in ([1, 2], {**good, "linear": None}, {**good, "features": 3}, {**good, "outputs": [1]}, {**good, "provenance": "x"}):
+        (tmp_path / "broken.json").write_text(json.dumps(broken), encoding="utf-8")
+        with pytest.raises(ValueError, match="correction"):
+            CorrectionModel.from_file(tmp_path / "broken.json")
 
 
 def test_correction_force_acts_on_the_vehicle(tmp_path):
@@ -338,9 +370,14 @@ def test_randomization_scales_keep_proportions_and_clip():
     with pytest.raises(ValueError, match="does not exist"):
         _randomized(1, {"drone.no_such.mass": {"uniform": [0, 1]}})
     with pytest.raises(ValueError, match="not set"):
-        _randomized(1, {"drone.no_such_value": {"scale_uniform": [0.9, 1.1]}})
+        _randomized(1, {"plant.actuation.thrust_scale": {"scale_uniform": [0.9, 1.1]}})
+    # A misspelt last name is an error too (outside plant nothing would read the new key).
+    with pytest.raises(ValueError, match="'drone.mas' does not exist"):
+        _randomized(1, {"drone.mas": {"uniform": [0.85, 0.95]}})
     with pytest.raises(ValueError, match="exactly one"):
         _randomized(1, {"drone.mass": {"uniform": [0, 1], "normal": [0, 1]}})
+    with pytest.raises(ValueError, match="scale_uniform"):
+        _randomized(1, {"drone.mass": {"scale_uniform": [[0.9], [1.1]]}})
 
 
 def test_randomized_mass_reaches_the_model_and_is_recorded(tmp_path):

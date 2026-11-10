@@ -32,13 +32,21 @@ body FLU, quaternions `[w, x, y, z]` body to world. Channels:
 | `specific_force_body` | 3 | accelerometer (else derived from the velocity) |
 | `valid` | 1 | 0 inside a source dropout (excluded from the fits) |
 
-Commands are held between samples, measurements interpolated.
+Commands are held between samples, measurements interpolated. Holding is
+exact when every sample is a command update. A log that keeps only some of
+the updates (a logger slower than the controller) is marked
+`"commands": "sampled"` in its metadata, and its commands are interpolated
+too.
 
 **From PX4.** `convert-ulog flight.ulg --out flight.npz [--mapping mapping.json]`
 (`uv sync --extra logs` for pyulog). Each channel is interpolated from its
 topic's own time stamps (not resampled to the nearest sample of another
 topic); samples inside a topic's gap (longer than 3 median periods) are
-marked invalid. The default mapping reads `vehicle_local_position`,
+marked invalid. The time base is the motor command topic when the log has it
+(`time_base` in the mapping names another topic or a rate): a command is
+held from the sample that records it, so its own instants should be the
+samples. Measurements are placed at `timestamp_sample` where the topic has
+it, commands at `timestamp`. The default mapping reads `vehicle_local_position`,
 `vehicle_attitude`, `vehicle_angular_velocity`, `vehicle_acceleration`,
 `actuator_motors`, `esc_status` and `battery_status`; a mapping file
 overrides topics and fields, `motor_order` (log motor for each simulator
@@ -71,7 +79,17 @@ in-flight stretches without wall or ground contact).
 `m` is the vehicle's mass from the params (the plant's thrust scale also
 absorbs a mass error). `f_b` is the accelerometer's specific force or the
 derivative of the velocity; the model is averaged the same way (the central
-difference averages the force over ±1 sample), so the timing is not biased.
+difference averages the force over ±1 sample), so the timing is not biased
+as long as the log's samples include the instants at which the command
+changes. A log slower than the controller, or sampled between its updates,
+records each change up to one sample late, and with held commands the delay
+comes out short by about half a sample or more (2 ms at 250 Hz, 5 ms at
+100 Hz for a 1 kHz controller). For such a log set `"commands": "sampled"`
+in the conversion mapping: with interpolated commands the delay is
+recovered. Samples next to an invalid one are left out too (their derivative
+would use it). The thrust axes of the params are used, so a rotor tilt does
+not go into the thrust scale. The battery is skipped, with a note, when the
+current is not measured or hardly varies.
 
 On simulated flights the estimators recover delay (to the physics step), up
 and down time constants (within 1–3 %), thrust scale (0.3 %), drag (3 %) and

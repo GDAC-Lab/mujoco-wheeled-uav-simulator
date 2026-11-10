@@ -36,15 +36,24 @@ class BatteryPacks:
         """Terminal voltage over the reference voltage, per vehicle."""
         return self.voltage / self.config.reference_voltage_v
 
-    def update(self, rotor_thrusts: np.ndarray, timestep: float) -> None:
-        """Advance one physics step; ``rotor_thrusts`` has one row per vehicle."""
+    def evaluate(self, rotor_thrusts: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Power, open-circuit voltage, overload flag and terminal voltage under ``rotor_thrusts``
+        (one row per vehicle) at the present charge; changes nothing."""
         config = self.config
         thrusts = np.maximum(np.asarray(rotor_thrusts, dtype=float), 0.0)
-        self.power = config.power_coefficient_w_per_n1p5 * np.sum(thrusts**1.5, axis=1) + config.auxiliary_power_w
+        power = config.power_coefficient_w_per_n1p5 * np.sum(thrusts**1.5, axis=1) + config.auxiliary_power_w
         open_circuit = self.open_circuit_voltage()
-        discriminant = open_circuit**2 - 4.0 * config.internal_resistance_ohm * self.power
-        self.overloaded = discriminant < 0.0
-        self.voltage = 0.5 * (open_circuit + np.sqrt(np.maximum(discriminant, 0.0)))
+        discriminant = open_circuit**2 - 4.0 * config.internal_resistance_ohm * power
+        return power, open_circuit, discriminant < 0.0, 0.5 * (open_circuit + np.sqrt(np.maximum(discriminant, 0.0)))
+
+    def terminal_voltage(self, rotor_thrusts: np.ndarray) -> np.ndarray:
+        """The terminal voltage under ``rotor_thrusts`` at the present charge; changes nothing."""
+        return self.evaluate(rotor_thrusts)[3]
+
+    def update(self, rotor_thrusts: np.ndarray, timestep: float, evaluated=None) -> None:
+        """Advance one physics step; ``rotor_thrusts`` has one row per vehicle (``evaluated``: its evaluate(), if at hand)."""
+        config = self.config
+        self.power, open_circuit, self.overloaded, self.voltage = self.evaluate(rotor_thrusts) if evaluated is None else evaluated
         # Past its maximum power the pack delivers that maximum: I = V_oc / (2 R) at V = V_oc / 2.
         self.current = np.where(
             self.overloaded,
@@ -95,6 +104,9 @@ class RotorActuation:
         self._history = np.zeros((self.delay_steps + 1, size))
         self._head = 0
         self._sqrt_thrust = np.zeros(size)
+        # The step in progress: the command leaving the delay line and the rotor speeds it started from.
+        self._delayed = np.zeros(size)
+        self._step_start = np.zeros(size)
         self.requested = np.zeros(size)
         self.delivered = np.zeros(size)
         self.saturated = np.zeros(size, dtype=bool)
@@ -131,6 +143,8 @@ class RotorActuation:
         command = np.asarray(command, dtype=float)
         self._history[:] = command
         self._sqrt_thrust = np.sqrt(self.steady_thrust(command, voltage_ratio))
+        self._delayed = command.copy()
+        self._step_start = self._sqrt_thrust.copy()
         self.requested = command.copy()
         self.delivered = self._sqrt_thrust**2
         self.initialized = True
@@ -144,10 +158,27 @@ class RotorActuation:
         self._head = (self._head + 1) % self._history.shape[0]
         self._history[self._head] = command
         # The oldest row is the command from delay_steps steps ago.
-        delayed = self._history[(self._head + 1) % self._history.shape[0]]
-        target = np.sqrt(self.steady_thrust(delayed, voltage_ratio))
-        alpha = np.where(target > self._sqrt_thrust, self._alpha_up, self._alpha_down)
-        self._sqrt_thrust = self._sqrt_thrust + alpha * (target - self._sqrt_thrust)
+        self._delayed = self._history[(self._head + 1) % self._history.shape[0]].copy()
+        self._step_start = self._sqrt_thrust
+        return self.deliver(voltage_ratio)
+
+    def depends_on_voltage(self, voltage_ratio: np.ndarray) -> bool:
+        """Whether the step in progress gives another thrust at another voltage: always without
+        voltage compensation, and with it when a rotor is at its (voltage-dependent) limit."""
+        if not self._compensated:
+            return True
+        return bool(np.any(self._scale * self._delayed > self.max_thrust * self._per_rotor(voltage_ratio) ** 2))
+
+    def deliver(self, voltage_ratio: np.ndarray | None = None) -> np.ndarray:
+        """The delivered thrust of the step in progress under ``voltage_ratio``.
+
+        ``step`` calls it once; calling it again with another ratio redoes the
+        same step (same delayed command, same starting speeds), which is how
+        the plant model finds the voltage consistent with the thrust it allows.
+        """
+        target = np.sqrt(self.steady_thrust(self._delayed, voltage_ratio))
+        alpha = np.where(target > self._step_start, self._alpha_up, self._alpha_down)
+        self._sqrt_thrust = self._step_start + alpha * (target - self._step_start)
         self.delivered = self._sqrt_thrust**2
         return self.delivered
 

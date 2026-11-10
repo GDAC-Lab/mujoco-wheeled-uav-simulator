@@ -221,6 +221,8 @@ class Simulator:
         if plant is None or plant.actuation is None:
             return
         history = np.asarray(command_history, dtype=float)
+        if history.size == 0:
+            return
         history = history.reshape(history.shape[0], -1)
         ratio = None if plant.battery is None else plant.battery.voltage_ratio()
         plant.actuation.settle(history[0], ratio)
