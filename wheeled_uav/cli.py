@@ -56,6 +56,7 @@ def _add_model_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--xml-template-file", default=None, help="Path to a MuJoCo XML template file to use instead of wheeled_uav.template.xml")
     subparser.add_argument("--generated-xml-dir", default=None, help=f"Directory to write generated XML files into instead of {DEFAULT_GENERATED_XML_DIR}")
     subparser.add_argument("--fidelity-mode", choices=("baseline", "hil"), default=None, help="Select whether the run is tagged as baseline physics mode or HIL mode (default: fidelity_mode from the params file)")
+    subparser.add_argument("--seed", type=int, default=None, help="Random seed of the run: network delays and losses, sensor noise, and the draws of the randomization section (default: simulation.seed from the params file, else 0)")
 
 
 def build_cli_parser() -> argparse.ArgumentParser:
@@ -67,7 +68,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     # Defaults for a bare invocation (no subcommand -> simulate). Every option
     # read by the simulate handler must appear here or a bare run raises
     # AttributeError; test_cli.py pins this by asserting parse_args([]).
-    parser.set_defaults(instance_id=0, num_uavs=1, spawn_radius=1.5, recv_port=None, send_port=None, bind_ip=None, state_target_ip=None, params_file=None, preset=None, xml_template_file=None, generated_xml_dir=None, fidelity_mode=None, pacing_mode=None, headless=False, duration_seconds=None, record=None, hold_until_first_command=None, physics_threads=None, state_format=None)
+    parser.set_defaults(instance_id=0, num_uavs=1, spawn_radius=1.5, recv_port=None, send_port=None, bind_ip=None, state_target_ip=None, params_file=None, preset=None, xml_template_file=None, generated_xml_dir=None, fidelity_mode=None, pacing_mode=None, headless=False, duration_seconds=None, record=None, hold_until_first_command=None, physics_threads=None, state_format=None, seed=None)
     subparsers = parser.add_subparsers(dest="command")
 
     simulate_parser = subparsers.add_parser("simulate", help="Run the MuJoCo simulator with viewer")
@@ -161,6 +162,8 @@ def _validate_arguments(parser: argparse.ArgumentParser, arguments: argparse.Nam
         parser.error("--duration-seconds must be positive")
     if getattr(arguments, "physics_threads", None) is not None and arguments.physics_threads < 0:
         parser.error("--physics-threads must be non-negative")
+    if getattr(arguments, "seed", None) is not None and arguments.seed < 0:
+        parser.error("--seed must be non-negative")
     if getattr(arguments, "state_timeout_seconds", 1.0) <= 0.0:
         parser.error("--state-timeout-seconds must be positive")
     if getattr(arguments, "status_display_interval", 1.0) <= 0.0:
@@ -196,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                 hold_until_first_command=arguments.hold_until_first_command,
                 physics_threads=arguments.physics_threads,
                 state_format=arguments.state_format,
+                seed=arguments.seed,
             )
         )
         return 0
@@ -211,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
                 template_path=arguments.xml_template_file,
                 generated_xml_dir=arguments.generated_xml_dir,
                 fidelity_mode=arguments.fidelity_mode,
+                seed=arguments.seed,
             )
         )
     if command == "hover-controller":

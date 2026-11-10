@@ -28,6 +28,7 @@ from .scene import (
     SimulationScene,
     load_simulation_scene,
     resolve_physics_threads,
+    resolve_seed,
     resolve_state_format,
     resolve_timing_config,
 )
@@ -50,7 +51,9 @@ class _SimulationRuntime:
             raise ValueError("--record is not supported with parallel physics (simulation.physics_threads)")
         self.scene = scene
         self.state_publisher = StatePayloadPublisher(scene)
-        self.command_dispatcher = ControlCommandDispatcher(scene.params, scene.fidelity, scene.request.num_uavs)
+        self.command_dispatcher = ControlCommandDispatcher(
+            scene.params, scene.fidelity, scene.request.num_uavs, seed=resolve_seed(scene)
+        )
         self.command_dispatcher.bind_bodies(scene.model, scene.uav_specs)
         self.actuator_model = ActuatorModel(
             scene.model,
@@ -160,6 +163,14 @@ class _SimulationRuntime:
     def republish_state(self, sock) -> None:
         self.state_publisher.resend_last(sock, self.scene.request.state_target_ip, self.send_port)
 
+    def flush_pending_states(self, sock) -> float:
+        """Send the state packets the HIL network model held back that are now due (see StatePayloadPublisher.flush_due)."""
+        return self.state_publisher.flush_due(sock, self.scene.request.state_target_ip, self.send_port)
+
+    def drain_pending_states(self, sock) -> None:
+        """At the end of a run: send the held-back state packets when they fall due."""
+        self.state_publisher.drain(sock, self.scene.request.state_target_ip, self.send_port)
+
 
 def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handle | None) -> None:
     runtime = _SimulationRuntime(scene)
@@ -218,6 +229,10 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 step_count += 1
                 if step_count % publish_every == 0:
                     runtime.publish_state(sock, realtime_tracker.realtime_factor, session_timing)
+                else:
+                    # A state the HIL network model held back leaves when it is
+                    # due, not with the next publish.
+                    runtime.flush_pending_states(sock)
                 if viewer is not None and step_count % viewer_sync_every == 0:
                     if runtime.parallel_physics is not None:
                         mujoco.mj_kinematics(scene.model, scene.data)  # poses for display
@@ -229,6 +244,7 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 previous_loop_time = loop_time
                 if use_realtime_pacing:
                     lag_monitor.check(realtime_tracker.realtime_factor)
+            runtime.drain_pending_states(sock)
     finally:
         runtime.close()
 
@@ -257,13 +273,16 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     def republish_state() -> None:
         runtime.republish_state(sock)
 
+    def send_due_states() -> float:
+        return runtime.flush_pending_states(sock)
+
     runtime.command_wait_wall_seconds = 0.0  # the first state follows no command
     publish_state()
     try:
         while (viewer is None or viewer.is_running()) and (duration_seconds is None or scene.data.time < duration_seconds):
             wait_started = time.perf_counter()
             if not runtime.command_dispatcher.wait_for_command(
-                sock, scene.data, republish=republish_state, request_again=publish_state
+                sock, scene.data, republish=republish_state, request_again=publish_state, service=send_due_states
             ):
                 print("lockstep: no control command received within the timeout; stopping simulation")
                 return
@@ -274,6 +293,7 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 if runtime.parallel_physics is not None:
                     mujoco.mj_kinematics(scene.model, scene.data)  # poses for display
                 viewer.sync()
+        runtime.drain_pending_states(sock)
     finally:
         runtime.close()
 

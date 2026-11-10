@@ -84,7 +84,7 @@ def apply_body_wrenches(data: mujoco.MjData, body_ids: list[int], body_wrenches:
 
 
 class ControlCommandDispatcher:
-    def __init__(self, params: dict[str, Any], fidelity: FidelityConfig, num_uavs: int):
+    def __init__(self, params: dict[str, Any], fidelity: FidelityConfig, num_uavs: int, *, seed: int = 0):
         self._params = params
         self._fidelity = fidelity
         self._num_uavs = num_uavs
@@ -96,7 +96,7 @@ class ControlCommandDispatcher:
         # stop, instead of clobbering the rows forever.
         self._wrench_rows_dirty = False
         self._pending_commands: list[PendingCommandDelivery] = []
-        self._rng = random.Random(0)
+        self._rng = random.Random(seed)
         self.has_received_command = False
         # Counter of fresh (non-stale) commands applied; lockstep mode blocks on it.
         self.applied_command_count = 0
@@ -302,6 +302,7 @@ class ControlCommandDispatcher:
         republish=None,
         timeout_seconds: float = 120.0,
         request_again=None,
+        service=None,
     ) -> bool:
         """Block until a fresh control command has been applied (lockstep mode).
 
@@ -312,8 +313,13 @@ class ControlCommandDispatcher:
         still receives the current state. When a command arrives but is thrown
         away (dropped by the HIL network model or rejected as stale),
         `request_again` is invoked at once: the controller has already answered
-        the current state and needs a new sample to answer again. Returns False
-        on timeout.
+        the current state and needs a new sample to answer again. `service`,
+        when given, is called on every pass and returns the seconds until it
+        needs to be called again (``math.inf``: not until something else
+        happens); the loop wakes up for it. The simulator uses it to send the
+        state packets the HIL network model holds back as soon as they fall
+        due: the controller cannot answer a state it has not received.
+        Returns False on timeout.
         """
         target_count = self.applied_command_count + 1
         start_time = time.monotonic()
@@ -333,14 +339,15 @@ class ControlCommandDispatcher:
             elif republish is not None and now - last_republish >= 1.0:
                 republish()
                 last_republish = now
+            service_seconds = math.inf if service is None else service()
             wait_seconds = deadline - now
             if republish is not None:
                 wait_seconds = min(wait_seconds, last_republish + 1.0 - now)
-            release_seconds = self._seconds_until_next_release()
+            release_seconds = min(self._seconds_until_next_release(), service_seconds)
             if release_seconds < wait_seconds:
-                # A command held back by the HIL network model falls due first.
-                # select() timeouts are coarse on Windows (a 15.6 ms tick), so
-                # sleep in short steps until it is due.
+                # A command (or a state packet) held back by the HIL network
+                # model falls due first. select() timeouts are coarse on
+                # Windows (a 15.6 ms tick), so sleep in short steps until it is due.
                 time.sleep(min(release_seconds, _POLL_SECONDS))
             else:
                 _wait_for_datagram(sock, max(0.0, wait_seconds))

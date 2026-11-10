@@ -29,6 +29,8 @@ __all__ = [
     "load_simulation_scene",
     "render_simulation_model",
     "resolve_physics_threads",
+    "resolve_seed",
+    "resolve_seed_from_params",
     "resolve_state_format",
     "resolve_timing_config",
     "validate_model",
@@ -62,6 +64,8 @@ class SimulationRequest:
     physics_threads: int | None = None
     # None -> use simulation.state_format from the params file.
     state_format: str | None = None
+    # None -> use simulation.seed from the params file (0 when absent).
+    seed: int | None = None
 
     def resolved_ports(self) -> tuple[int, int]:
         default_recv_port, default_send_port = get_instance_ports(self.instance_id)
@@ -209,6 +213,23 @@ def resolve_physics_threads(scene: SimulationScene) -> int:
     if threads < 0:
         raise ValueError("simulation.physics_threads must be non-negative")
     return threads
+
+
+def resolve_seed(scene: SimulationScene) -> int:
+    """The run's random seed: --seed, else simulation.seed, else 0.
+
+    Every random draw of a run (HIL network delays and losses, sensor noise,
+    the plant model's sensor noise and dropouts) comes from generators seeded
+    with it, so two runs with the same seed and inputs draw the same values.
+    """
+    return resolve_seed_from_params(scene.params, getattr(scene.request, "seed", None))
+
+
+def resolve_seed_from_params(params: dict[str, Any], override: int | None = None) -> int:
+    seed = override if override is not None else params.get("simulation", {}).get("seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError(f"simulation.seed must be a non-negative integer, got {seed!r}")
+    return seed
 
 
 STATE_FORMATS = ("json", "binary")

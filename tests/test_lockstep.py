@@ -110,3 +110,25 @@ def test_lockstep_asks_again_when_a_command_is_dropped(tmp_path):
     # Every dropped command was answered by a re-published state with a new
     # sequence, so the run needed more states than its 11 control periods.
     assert len({state["sequence"] for state in states}) > 11
+
+
+def test_lockstep_delivers_a_held_back_state_when_it_falls_due(tmp_path):
+    # Regression: with a state delay, lockstep used to send each state only with
+    # the once-a-second re-send, so 0.05 s of simulation took about 11 s.
+    params = copy.deepcopy(load_vehicle_params())
+    params["fidelity_mode"] = "hil"
+    params["network_fidelity"].update({"enabled": True, "state_tx_latency_ms": 15.0})
+    params_path = tmp_path / "vehicle_params.json"
+    params_path.write_text(json.dumps(params), encoding="utf-8")
+
+    started = time.perf_counter()
+    datagrams = _run_lockstep(tmp_path, params_path=str(params_path))
+    elapsed = time.perf_counter() - started
+
+    states = [json.loads(datagram) for datagram in datagrams]
+    # The final state, held back like every other, still reaches the controller.
+    assert states[-1]["sim_time"] >= 0.05 - 1e-9
+    sequences = [state["sequence"] for state in states]
+    assert sequences == sorted(set(sequences))  # no re-sent copies: nothing waited a second
+    # 11 states held back 15 ms each, plus the controller's 2 s wait for the end of the run.
+    assert elapsed < 2.0 + 11 * 0.015 + 1.5

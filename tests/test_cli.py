@@ -61,7 +61,7 @@ class CliParserTests(unittest.TestCase):
             "bind_ip", "state_target_ip", "params_file", "preset", "xml_template_file",
             "generated_xml_dir", "fidelity_mode", "pacing_mode", "headless",
             "duration_seconds", "record", "hold_until_first_command",
-            "physics_threads", "state_format",
+            "physics_threads", "state_format", "seed",
         ):
             self.assertTrue(hasattr(arguments, option_name), f"missing default for {option_name}")
 
@@ -74,7 +74,10 @@ class CliParserTests(unittest.TestCase):
         self.assertEqual((first.physics_threads, first.state_format), (4, "binary"))
         # None -> simulation.physics_threads / simulation.state_format in the params file decide.
         self.assertEqual((second.physics_threads, second.state_format), (None, None))
-        for invalid in (["--state-format", "msgpack"], ["--physics-threads", "-1"]):
+        with patch("wheeled_uav.runtime.run_simulation") as run_simulation:
+            main(["simulate", "--headless", "--seed", "12"])
+        self.assertEqual(run_simulation.call_args.args[0].seed, 12)
+        for invalid in (["--state-format", "msgpack"], ["--physics-threads", "-1"], ["--seed", "-3"]):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 main(["simulate", "--headless", *invalid])
 

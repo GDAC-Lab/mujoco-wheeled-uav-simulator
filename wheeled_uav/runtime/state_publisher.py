@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,7 +18,7 @@ from ..state_packets import encode_state_packet
 from ..types import SensorLayout, UAVModelSpec
 from .contact import build_contact_reports
 from .fidelity import ActuatorSnapshot, apply_sensor_fidelity
-from .scene import SimulationScene, resolve_state_format
+from .scene import SimulationScene, resolve_seed, resolve_state_format
 
 __all__ = [
     "StatePayloadPublisher",
@@ -199,8 +201,9 @@ class StatePayloadPublisher:
         self._sequence = 0
         self._last_payload: bytes | None = None
         self._pending_datagrams: list[PendingDatagram] = []
-        self._rng = random.Random(0)
-        self._sensor_rng = np.random.default_rng(0)
+        seed = resolve_seed(scene)
+        self._rng = random.Random(seed)
+        self._sensor_rng = np.random.default_rng(seed)
         self._state_format = resolve_state_format(scene)
         if self._state_format == "binary":
             logging = scene.fidelity.logging
@@ -234,6 +237,8 @@ class StatePayloadPublisher:
         return loss_percent > 0.0 and self._rng.random() * 100.0 < loss_percent
 
     def _flush_due_datagrams(self, sock: socket.socket, target_ip: str, send_port: int, now_ns: int) -> None:
+        if not self._pending_datagrams:
+            return
         remaining_datagrams: list[PendingDatagram] = []
         for pending_datagram in self._pending_datagrams:
             if pending_datagram.release_time_ns <= now_ns:
@@ -241,6 +246,38 @@ class StatePayloadPublisher:
             else:
                 remaining_datagrams.append(pending_datagram)
         self._pending_datagrams = remaining_datagrams
+
+    def flush_due(self, sock: socket.socket, target_ip: str, send_port: int) -> float:
+        """Send the held-back state packets that have fallen due; return the seconds until the next one.
+
+        The HIL network model holds each state packet back by its sampled
+        delay. The loops call this between publishes (every physics step, and
+        while lockstep waits for a command), so a packet leaves when it falls
+        due rather than with the next publish or re-send. Returns ``math.inf``
+        when nothing is held back.
+        """
+        if not self._pending_datagrams:
+            return math.inf
+        now_ns = wall_time_ns()
+        self._flush_due_datagrams(sock, target_ip, send_port, now_ns)
+        if not self._pending_datagrams:
+            return math.inf
+        next_release_ns = min(pending.release_time_ns for pending in self._pending_datagrams)
+        return max(0.0, (next_release_ns - now_ns) / 1.0e9)
+
+    def drain(self, sock: socket.socket, target_ip: str, send_port: int, timeout_seconds: float = 5.0) -> None:
+        """Send every held-back state packet, each when it falls due (at the end of a run).
+
+        Without this the last states of a run with a state delay would never
+        leave, and a controller would not see the final sample.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        while (wait_seconds := self.flush_due(sock, target_ip, send_port)) < math.inf:
+            if time.monotonic() >= deadline:
+                self._pending_datagrams.clear()
+                return
+            # Short sleeps: timer resolution on Windows is coarse (15.6 ms) for longer ones.
+            time.sleep(min(wait_seconds, 0.0005))
 
     def build_payload(
         self,

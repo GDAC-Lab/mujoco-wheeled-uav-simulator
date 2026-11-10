@@ -82,6 +82,7 @@ class _DummyRequest:
         self.instance_id = 0
         self.fidelity_mode = fidelity_mode
         self.state_format = None
+        self.seed = None
 
 
 class _DummyScene:
@@ -267,6 +268,51 @@ class StatePayloadTests(unittest.TestCase):
         self.assertEqual(sock.sent_packets[0], (b"seq=1", ("127.0.0.1", 5001)))
 
 
+    def test_flush_due_sends_a_held_back_packet_without_a_new_publish(self) -> None:
+        publisher = StatePayloadPublisher(
+            _DummyScene(FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, state_tx_latency_ms=5.0)))
+        )
+        publisher.build_payload = lambda realtime_factor, sequence, *args, **kwargs: f"seq={sequence}".encode("utf-8")
+        sock = _FakeSocket()
+
+        self.assertEqual(publisher.flush_due(sock, "127.0.0.1", 5001), float("inf"))  # nothing held back
+        with patch("wheeled_uav.runtime.state_publisher.wall_time_ns", side_effect=[1_000_000, 3_000_000, 6_000_000]):
+            publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)  # due at 6 ms
+            self.assertAlmostEqual(publisher.flush_due(sock, "127.0.0.1", 5001), 0.003)
+            self.assertEqual(sock.sent_packets, [])
+            self.assertEqual(publisher.flush_due(sock, "127.0.0.1", 5001), float("inf"))
+        self.assertEqual(sock.sent_packets, [(b"seq=1", ("127.0.0.1", 5001))])
+
+    def test_drain_sends_every_held_back_packet(self) -> None:
+        publisher = StatePayloadPublisher(
+            _DummyScene(FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, state_tx_latency_ms=2.0)))
+        )
+        publisher.build_payload = lambda realtime_factor, sequence, *args, **kwargs: f"seq={sequence}".encode("utf-8")
+        sock = _FakeSocket()
+        publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)
+        publisher.send_state(sock, "127.0.0.1", 5001, 1.0, None)
+
+        publisher.drain(sock, "127.0.0.1", 5001)
+
+        self.assertEqual([payload for payload, _ in sock.sent_packets], [b"seq=1", b"seq=2"])
+
+    def test_the_seed_drives_the_network_draws(self) -> None:
+        def sampled_delays(seed: int | None) -> list[float]:
+            scene = _DummyScene(FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, jitter_std_dev_ms=3.0)))
+            if seed is not None:
+                scene.params = {"simulation": {"seed": seed}}
+            publisher = StatePayloadPublisher(scene)
+            return [publisher._sample_delay_ms(10.0) for _ in range(5)]
+
+        self.assertEqual(sampled_delays(None), sampled_delays(0))  # the default seed is 0, as before
+        self.assertEqual(sampled_delays(7), sampled_delays(7))
+        self.assertNotEqual(sampled_delays(7), sampled_delays(0))
+        for invalid in (-1, 1.5, True, "3"):
+            scene = _DummyScene(FidelityConfig())
+            scene.params = {"simulation": {"seed": invalid}}
+            with self.assertRaises(ValueError):
+                StatePayloadPublisher(scene)
+
     def test_resend_last_repeats_the_packet_byte_for_byte(self) -> None:
         publisher = StatePayloadPublisher(_DummyScene(FidelityConfig()))
         publisher.build_payload = lambda realtime_factor, sequence, *args, **kwargs: f"seq={sequence}".encode("utf-8")
@@ -342,6 +388,20 @@ class CommandDispatcherTests(unittest.TestCase):
         self.assertLess(elapsed, 1.0)
         # One look before the datagram and one after it: the wait sleeps on the socket instead of polling.
         self.assertLessEqual(len(attempts), 3)
+
+    def test_wait_for_command_calls_the_service_while_it_waits(self) -> None:
+        dispatcher = ControlCommandDispatcher(_DISPATCHER_PARAMS, FidelityConfig(), num_uavs=1)
+        calls: list[float] = []
+
+        def service() -> float:
+            calls.append(time.monotonic())
+            return 0.002  # asks to be called again in 2 ms
+
+        applied = dispatcher.wait_for_command(_FakeSocket(), _FakeData(4), service=service, timeout_seconds=0.05)
+
+        self.assertFalse(applied)
+        # Without the wake-ups it would be called once and the loop would sleep until the timeout.
+        self.assertGreater(len(calls), 5)
 
     def test_wait_for_command_wakes_when_a_delayed_command_falls_due(self) -> None:
         fidelity = FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, command_rx_latency_ms=30.0))
