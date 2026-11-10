@@ -132,3 +132,21 @@ def test_lockstep_delivers_a_held_back_state_when_it_falls_due(tmp_path):
     assert sequences == sorted(set(sequences))  # no re-sent copies: nothing waited a second
     # 11 states held back 15 ms each, plus the controller's 2 s wait for the end of the run.
     assert elapsed < 2.0 + 11 * 0.015 + 1.5
+
+
+def test_lockstep_run_with_the_plant_model(tmp_path):
+    params = copy.deepcopy(load_vehicle_params())
+    params["plant"] = {
+        "actuation": {"delay_s": 0.004, "motor_time_constant_up_s": 0.03, "motor_time_constant_down_s": 0.05},
+        "battery": {},
+        "aerodynamics": {"rotor_drag_coefficients_n_s_per_m": [0.2, 0.2, 0.1]},
+        "sensors": {"pose_delay_s": 0.01, "position_noise_std_m": 0.001},
+    }
+    params_path = tmp_path / "vehicle_params.json"
+    params_path.write_text(json.dumps(params), encoding="utf-8")
+
+    states = [json.loads(datagram) for datagram in _run_lockstep(tmp_path, params_path=str(params_path))]
+
+    assert states[-1]["sim_time"] >= 0.05 - 1e-9
+    assert states[-1]["plant"]["measurement_age_s"] >= 0.0
+    assert states[-1]["plant"]["battery_voltage_v"] > 0.0

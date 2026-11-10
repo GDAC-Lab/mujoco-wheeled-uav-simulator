@@ -33,6 +33,8 @@ In `lockstep`, wall-clock diagnostics lose their usual meaning: `realtime_factor
 
 While it blocks, the `lockstep` simulator re-sends the last state packet unchanged once per second, so a controller that starts late still receives a sample. The copy keeps its `sequence`, so the duplicate-sample rule drops it instead of answering it with a second command. A command that arrives but is thrown away (dropped by the HIL network model or rejected as stale) is different: the controller has already answered, so the simulator publishes the current state again at once under a new `sequence`, and the controller answers that.
 
+A state packet the HIL network model holds back (`network_fidelity.state_tx_latency_ms`, jitter) leaves as soon as it falls due, in every pacing mode: between publishes, while `lockstep` waits for a command, and at the end of a run (the last state still reaches the controller). The delay is wall-clock time; in `lockstep` it slows the run down but does not change what the controller sees at a given simulation time. To give the controller old measurements in simulation time, use the plant model's sensor delays (`plant.sensors`, [PLANT_MODEL.md](PLANT_MODEL.md)).
+
 **Avoid:** a controller-side “sync mode” that pauses on `sim_wall_skew` or `state.time` to align wall clocks. That introduces dead time and makes the loop feel slower than real time.
 
 For remote HIL, use **`realtime`**: the simulator owns wall-clock pacing; the controller never waits and reacts event-driven to new UDP samples.
@@ -65,8 +67,9 @@ External controller
 | `simulation.viewer_fps` | `viewer.sync()` rate cap (interactive runs) | `60` |
 | `simulation.pacing_mode` | Wall-clock pacing | `realtime` (HIL/interactive), `accelerated` (fast batch), or `lockstep` (deterministic co-simulation) |
 | `simulation.hold_until_first_command` | Freeze vehicles at the spawn state (pose and initial velocity) until the first control command is applied (reproducible initial condition for scripted runs) | `true` in the bundled config; set to `false` by presets that start resting on the ground; no effect in `lockstep` |
+| `simulation.seed` | Seed of every random draw of the run: HIL network delays and losses, sensor noise, the plant model's sensor noise and dropouts, and the draws of the `randomization` section | `0` |
 
-CLI overrides: `simulate --pacing-mode accelerated`, `simulate --no-hold-until-first-command`
+CLI overrides: `simulate --pacing-mode accelerated`, `simulate --no-hold-until-first-command`, `simulate --seed 3`
 
 **Control period** = `timestep × state_publish_every_n_steps` (e.g. 5 ms at defaults).
 

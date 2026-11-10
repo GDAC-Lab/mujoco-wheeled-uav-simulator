@@ -182,3 +182,28 @@ class CliParserTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdentificationCommandTests(unittest.TestCase):
+    def test_excite_identify_and_predict(self) -> None:
+        import json
+        import tempfile
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "true_plant.json").write_text(
+                json.dumps({"actuation": {"delay_s": 0.004, "motor_time_constant_up_s": 0.03, "thrust_scale": 0.97}}), encoding="utf-8"
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["excite", "--plant", str(folder / "true_plant.json"), "--duration", "4", "--out", str(folder / "flight.npz")]), 0)
+                self.assertEqual(main(["identify", str(folder / "flight.npz"), "--correction", "linear", "--out", str(folder / "result.json")]), 0)
+                self.assertEqual(main(["predict", str(folder / "flight.npz"), "--plant", str(folder / "result.json"), "--horizons", "0.1", "--stride", "1", "--out", str(folder / "prediction.json")]), 0)
+            result = json.loads((folder / "result.json").read_text(encoding="utf-8"))
+            self.assertAlmostEqual(result["plant"]["actuation"]["delay_s"], 0.004)
+            self.assertAlmostEqual(result["plant"]["actuation"]["thrust_scale"], 0.97, places=2)
+            self.assertEqual(result["plant"]["correction"]["file"], "result.correction.json")  # next to the result
+            prediction = json.loads((folder / "prediction.json").read_text(encoding="utf-8"))
+            self.assertLess(prediction["horizons_s"]["0.1"]["position_m"]["median"], 1e-3)

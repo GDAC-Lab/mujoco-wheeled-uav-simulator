@@ -10,6 +10,8 @@ English documentation: [README.md](README.md)
 
 **空力効果モデル**（設定ゲート付きの壁面効果力注入）: [docs/AERODYNAMICS.ja.md](docs/AERODYNAMICS.ja.md) — 英語版 [docs/AERODYNAMICS.md](docs/AERODYNAMICS.md)。
 
+**プラントモデル**（任意。ロータのむだ時間と遅れ、推力の較正誤差、電池の電圧降下、抗力と地面効果、データで当てはめた補正、センサの遅れ・雑音・バイアス・欠測、パラメータのランダム化）とプロセス内の `Simulator`: [docs/PLANT_MODEL.ja.md](docs/PLANT_MODEL.ja.md)。飛行ログからの**システム同定**（むだ時間、モータの時定数、推力の倍率、抗力、電池、k ステップ予測誤差）: [docs/SYSTEM_IDENTIFICATION.ja.md](docs/SYSTEM_IDENTIFICATION.ja.md)。英語版は同じ名前の `.md`。
+
 `baseline` / `hil` の使い分けと、論文向けの fidelity 指標整理は [docs/FIDELITY_MODES.ja.md](docs/FIDELITY_MODES.ja.md) にまとめています。
 
 **時刻同期**（シミュレータ時刻・実時間・UDP サンプル周期）: [docs/TIMING.ja.md](docs/TIMING.ja.md) — 英語版 [docs/TIMING.md](docs/TIMING.md)。
@@ -232,7 +234,7 @@ uv run mujoco-wheeled-uav-simulator check-model --num-uavs 3
 
 | モジュール | 役割 |
 |---------|------|
-| `wheeled_uav/cli.py` | CLI 入口です。`simulate` / `check-model` / `hover-controller` を振り分けます。 |
+| `wheeled_uav/cli.py` | CLI 入口です。`simulate` / `check-model` / `hover-controller` と、同定のコマンド `identify` / `predict` / `excite` / `convert-ulog` を振り分けます。 |
 | `wheeled_uav/config.py` | `vehicle_params.json` の読込と fidelity / 空力設定の解釈を担当します。 |
 | `wheeled_uav/paths.py` | リポジトリ直下の主要ファイルパスと共通定数をまとめています。 |
 | `wheeled_uav/protocol.py` | シミュレータと全コントローラで共有する UDP ワイヤフォーマット（ポート、ソケット、packet の構築/解釈）。MuJoCo 非依存です。 |
@@ -241,6 +243,10 @@ uv run mujoco-wheeled-uav-simulator check-model --num-uavs 3
 | `wheeled_uav/model/` | MuJoCo モデル生成: `builder.py`（XML 置換）、`surface.py`（地形の数式と hfield 出力）、`poses.py`（初期姿勢）、`xml_format.py`。 |
 | `wheeled_uav/runtime/` | シミュレーション実行系: `scene.py`（リクエスト/シーン/検証）、`loop.py`（stepping / lockstep ループ）、`state_publisher.py`、`command_dispatcher.py`、`fidelity.py`（センサノイズ・アクチュエータ動特性）、`contact.py`、`aerodynamics.py`、`visuals.py`（カメラ・オーバーレイ・録画）。 |
 | `wheeled_uav/controllers/` | 参照コントローラ（`hover.py`）。MuJoCo なしで import できるため controller 専用ホストでも使えます。 |
+| `wheeled_uav/plant/` | プラントモデル（`plant` セクション）: アクチュエーション、電池、抗力と地面効果、データで当てはめた補正、センサ、ランダム化（[docs/PLANT_MODEL.ja.md](docs/PLANT_MODEL.ja.md)）。 |
+| `wheeled_uav/sim.py` | プロセス内の `Simulator`: 同じ場面とプラントを、UDP なしで Python から進めます。 |
+| `wheeled_uav/flightlog.py`、`flightlog_ulog.py` | 中立の飛行ログ形式と、PX4 の ULog からの変換。 |
+| `wheeled_uav/sysid/` | システム同定と k ステップ予測誤差（[docs/SYSTEM_IDENTIFICATION.ja.md](docs/SYSTEM_IDENTIFICATION.ja.md)）。 |
 
 ### MATLAB 構成内訳
 
@@ -471,7 +477,7 @@ controller の既定値は `vehicle_params.json` の `controller` に集約し�
 
 - MATLAB はコントローラ内部で計算したロータ推力を `rotor_omega = sqrt(T / k_f)` に変換して送信します
 - Python は `vehicle_params.json` の `actuation.thrust_coefficient` を使って再び推力へ変換し、MuJoCo へ適用します
-- モータ一次遅れ・レート制限は `actuator_dynamics` でオプション指定できます（[docs/FIDELITY_MODES.ja.md](docs/FIDELITY_MODES.ja.md) 参照）
+- モータ一次遅れ・レート制限は `hil` モードでは `actuator_dynamics` でオプション指定できます（[docs/FIDELITY_MODES.ja.md](docs/FIDELITY_MODES.ja.md) 参照）。プラントモデルの `plant.actuation` はどのモードでも効き、上げ・下げで別の時定数、指令のむだ時間、上下限を持てます（[docs/PLANT_MODEL.ja.md](docs/PLANT_MODEL.ja.md) 参照）
 
 </details>
 

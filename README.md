@@ -10,6 +10,8 @@
 
 **Aerodynamic effect models** (config-gated wall-effect force injection): [docs/AERODYNAMICS.md](docs/AERODYNAMICS.md) — Japanese in [docs/AERODYNAMICS.ja.md](docs/AERODYNAMICS.ja.md).
 
+**Plant model** (opt-in; rotor delay and lag, thrust calibration error, battery sag, drag and ground effect, a data-fitted correction, sensor delays, noise, bias and dropouts, parameter randomization) and the in-process `Simulator`: [docs/PLANT_MODEL.md](docs/PLANT_MODEL.md). **System identification** from flight logs (delay, motor time constant, thrust scale, drag, battery, k-step prediction error): [docs/SYSTEM_IDENTIFICATION.md](docs/SYSTEM_IDENTIFICATION.md). Japanese in the `.ja.md` files next to them.
+
 Fidelity-mode usage and publication-oriented logging notes are summarized in [docs/FIDELITY_MODES.md](docs/FIDELITY_MODES.md).
 
 **Time synchronization** (simulator time vs wall clock, UDP sample cadence, controller rules): [docs/TIMING.md](docs/TIMING.md) — Japanese summary in [docs/TIMING.ja.md](docs/TIMING.ja.md).
@@ -240,7 +242,7 @@ This repository is intended as a reusable simulator base plus a few samples. To 
 
 | Module | Role |
 |------|------|
-| `wheeled_uav/cli.py` | CLI entry point. Dispatches `simulate`, `check-model`, and `hover-controller`. |
+| `wheeled_uav/cli.py` | CLI entry point. Dispatches `simulate`, `check-model`, `hover-controller`, and the identification commands `identify`, `predict`, `excite`, `convert-ulog`. |
 | `wheeled_uav/config.py` | Loads `vehicle_params.json` and parses fidelity/aerodynamics configs. |
 | `wheeled_uav/paths.py` | Centralizes important repository paths and shared constants. |
 | `wheeled_uav/protocol.py` | UDP wire format shared by the simulator and all controllers (ports, sockets, packet parse/build). MuJoCo-free. |
@@ -249,6 +251,10 @@ This repository is intended as a reusable simulator base plus a few samples. To 
 | `wheeled_uav/model/` | MuJoCo model generation: `builder.py` (XML replacements), `surface.py` (terrain math + hfield emission), `poses.py` (spawn poses), `xml_format.py`. |
 | `wheeled_uav/runtime/` | Simulation runtime: `scene.py` (request/scene/validate), `loop.py` (stepping/lockstep loops), `state_publisher.py`, `command_dispatcher.py`, `fidelity.py` (sensor noise + actuator dynamics), `contact.py`, `aerodynamics.py`, `visuals.py` (camera, overlay, recording). |
 | `wheeled_uav/controllers/` | Reference controllers (`hover.py`); importable without MuJoCo for controller-only hosts. |
+| `wheeled_uav/plant/` | Plant model (`plant` section): actuation, battery, drag and ground effect, data-fitted correction, sensors, randomization ([docs/PLANT_MODEL.md](docs/PLANT_MODEL.md)). |
+| `wheeled_uav/sim.py` | In-process `Simulator`: the same scene and plant stepped from Python, without UDP. |
+| `wheeled_uav/flightlog.py`, `flightlog_ulog.py` | Neutral flight-log format, and PX4 ULog conversion. |
+| `wheeled_uav/sysid/` | System identification and k-step prediction error ([docs/SYSTEM_IDENTIFICATION.md](docs/SYSTEM_IDENTIFICATION.md)). |
 
 ### MATLAB overview
 
@@ -473,7 +479,7 @@ The current default in `vehicle_params.json` is `actuation.command_mode = "omega
 
 - MATLAB converts controller thrust outputs into `rotor_omega = sqrt(T / k_f)` before sending
 - Python converts them back to thrust using `actuation.thrust_coefficient` from `vehicle_params.json` and applies the result in MuJoCo
-- optional first-order motor lag and rate limits are available via `actuator_dynamics` (see [docs/FIDELITY_MODES.md](docs/FIDELITY_MODES.md))
+- optional first-order motor lag and rate limits are available via `actuator_dynamics` in `hil` mode (see [docs/FIDELITY_MODES.md](docs/FIDELITY_MODES.md)); the plant model's `plant.actuation` applies in every mode, with separate up/down time constants, a command delay and limits (see [docs/PLANT_MODEL.md](docs/PLANT_MODEL.md))
 
 </details>
 

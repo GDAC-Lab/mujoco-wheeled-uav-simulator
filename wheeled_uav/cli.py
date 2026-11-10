@@ -4,6 +4,10 @@ Subcommands:
   simulate          Run the MuJoCo simulator (viewer or headless).
   check-model       Render the XML, compile it, print a JSON summary, exit.
   hover-controller  Run the Python reference hover controller over UDP.
+  identify          Identify the plant (actuation, drag, battery, correction) from a flight log.
+  predict           k-step prediction error of the simulator against a flight log.
+  excite            Fly an excitation flight in the simulator and save its flight log.
+  convert-ulog      Convert a PX4 ULog into a flight log (needs pyulog).
 
 Heavy imports (MuJoCo) are deferred into the subcommand handlers so that
 ``hover-controller`` also works on controller-only hosts without MuJoCo.
@@ -148,7 +152,126 @@ def build_cli_parser() -> argparse.ArgumentParser:
     hover_controller_parser.add_argument("--state-timeout-seconds", type=float, default=10.0, help="Maximum wall-clock time to wait for state packets before stopping")
     hover_controller_parser.add_argument("--status-display-interval", type=float, default=2.0, help="Interval for controller status printouts in simulation seconds")
 
+    identify_parser = subparsers.add_parser("identify", help="Identify the plant from a flight log (docs/SYSTEM_IDENTIFICATION.md)")
+    identify_parser.add_argument("log", help="Flight log (.npz, wheeled_uav.flightlog)")
+    _add_params_arguments(identify_parser)
+    identify_parser.add_argument("--start", type=float, default=None, help="Use the log from this time [s]")
+    identify_parser.add_argument("--end", type=float, default=None, help="Use the log up to this time [s]")
+    identify_parser.add_argument("--max-delay", type=float, default=0.04, help="Largest command delay to search [s] (default 0.04)")
+    identify_parser.add_argument("--smooth", type=float, default=0.0, help="Smoothing window for derived accelerations [s] (default 0: none)")
+    identify_parser.add_argument("--quadratic-drag", action="store_true", help="Also fit a quadratic (body) drag in body x and y")
+    identify_parser.add_argument("--correction", choices=("knn", "linear"), default=None, help="Also fit a data-fitted correction to the remaining force")
+    identify_parser.add_argument("--correction-out", default=None, help="Where to save the correction (default: next to --out, or correction.json)")
+    identify_parser.add_argument("--out", default=None, help="Write the result (fits and the proposed plant section) to this JSON file")
+
+    predict_parser = subparsers.add_parser("predict", help="k-step prediction error against a flight log")
+    predict_parser.add_argument("log", help="Flight log (.npz)")
+    _add_params_arguments(predict_parser)
+    predict_parser.add_argument("--horizons", type=float, nargs="+", default=[0.05, 0.1, 0.2, 0.5], help="Prediction horizons [s]")
+    predict_parser.add_argument("--stride", type=float, default=0.25, help="Time between prediction starts [s]")
+    predict_parser.add_argument("--out", default=None, help="Write the result to this JSON file")
+
+    excite_parser = subparsers.add_parser("excite", help="Fly an excitation flight in the simulator and save its flight log")
+    _add_params_arguments(excite_parser)
+    excite_parser.add_argument("--out", required=True, help="Flight log to write (.npz)")
+    excite_parser.add_argument("--duration", type=float, default=20.0, help="Excitation time after take-off [s]")
+    excite_parser.add_argument("--seed", type=int, default=0, help="Seed of the excitation and of the run")
+    excite_parser.add_argument("--measured", action="store_true", help="Log what the controller measures (plant sensors) instead of the true state")
+
+    convert_parser = subparsers.add_parser("convert-ulog", help="Convert a PX4 ULog into a flight log (needs pyulog)")
+    convert_parser.add_argument("ulog", help="PX4 log (.ulg)")
+    convert_parser.add_argument("--out", required=True, help="Flight log to write (.npz)")
+    convert_parser.add_argument("--mapping", default=None, help="JSON overriding the topic mapping (wheeled_uav.flightlog_ulog.DEFAULT_MAPPING)")
+    convert_parser.add_argument("--start", type=float, default=None, help="Start [s from the first sample]")
+    convert_parser.add_argument("--end", type=float, default=None, help="End [s from the first sample]")
+
     return parser
+
+
+def _add_params_arguments(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument("--params-file", default=None, help="vehicle_params.json of the vehicle (default: the repository's)")
+    subparser.add_argument("--preset", default=None, metavar="NAME", help="Bundled parameter preset (configs/vehicle_params.NAME.json)")
+    subparser.add_argument(
+        "--plant",
+        default=None,
+        metavar="JSON",
+        help="Plant section to use instead of the params file's: an identify result (its 'plant'), or a JSON object of the section",
+    )
+
+
+def _load_json(path: str) -> dict:
+    import json
+    from pathlib import Path
+
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _plant_overrides(plant_path: str | None) -> dict | None:
+    """{"plant": section} from an identify result or a bare section; a relative correction file is taken next to it."""
+    if plant_path is None:
+        return None
+    from pathlib import Path
+
+    document = _load_json(plant_path)
+    plant = dict(document.get("plant", document))
+    correction = plant.get("correction")
+    if isinstance(correction, dict) and isinstance(correction.get("file"), str) and not Path(correction["file"]).is_absolute():
+        plant["correction"] = {**correction, "file": str(Path(plant_path).resolve().parent / correction["file"])}
+    return {"plant": plant}
+
+
+def _run_identification_command(command: str, arguments: argparse.Namespace) -> int:
+    import json
+    from pathlib import Path
+
+    from .config import load_vehicle_params, merge_params
+    from .flightlog import FlightLog
+
+    params_path = resolve_params_file(arguments.params_file, arguments.preset)
+    params = merge_params(load_vehicle_params(params_path), _plant_overrides(arguments.plant))
+    if command == "excite":
+        from .sim import Simulator
+        from .sysid import excitation_flight
+
+        with Simulator(params_path, params=params, seed=arguments.seed) as sim:
+            log = excitation_flight(sim, duration_s=arguments.duration, seed=arguments.seed, measured=arguments.measured)
+        log.save(arguments.out)
+        print(f"wrote {arguments.out}: {len(log)} samples over {log.time[-1] - log.time[0]:.1f} s")
+        return 0
+    log = FlightLog.load(arguments.log)
+    if command == "identify":
+        from .sysid import identify
+
+        log = log.window(arguments.start, arguments.end)
+        correction_path = arguments.correction_out
+        if arguments.correction is not None and correction_path is None:
+            correction_path = str(Path(arguments.out).with_name(Path(arguments.out).stem + ".correction.json")) if arguments.out else "correction.json"
+        result = identify(
+            log,
+            params,
+            max_delay_s=arguments.max_delay,
+            smooth_s=arguments.smooth,
+            quadratic_drag=arguments.quadratic_drag,
+            correction=arguments.correction,
+            correction_path=correction_path,
+        )
+    else:
+        from .sim import Simulator
+        from .sysid import prediction_error
+
+        with Simulator(params_path, params=params) as sim:
+            result = prediction_error(log, sim, horizons_s=arguments.horizons, stride_s=arguments.stride)
+    if command == "identify" and arguments.out and "correction" in result["plant"]:
+        # Name the correction relative to the result, so the two can move together (see --plant).
+        correction_file = Path(result["plant"]["correction"]["file"]).resolve()
+        if correction_file.parent == Path(arguments.out).resolve().parent:
+            result["plant"]["correction"]["file"] = correction_file.name
+    text = json.dumps(result, indent=1)
+    if arguments.out:
+        Path(arguments.out).write_text(text + "\n", encoding="utf-8")
+        print(f"wrote {arguments.out}")
+    print(text)
+    return 0
 
 
 def _validate_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
@@ -234,6 +357,17 @@ def main(argv: list[str] | None = None) -> int:
             status_display_interval=arguments.status_display_interval,
             fidelity_mode=arguments.fidelity_mode,
         )
+        return 0
+
+    if command in ("identify", "predict", "excite"):
+        return _run_identification_command(command, arguments)
+    if command == "convert-ulog":
+        from .flightlog_ulog import convert_ulog
+
+        log = convert_ulog(arguments.ulog, _load_json(arguments.mapping) if arguments.mapping else None, start_s=arguments.start, end_s=arguments.end)
+        log.save(arguments.out)
+        valid = log.valid_mask()
+        print(f"wrote {arguments.out}: {len(log)} samples over {log.time[-1] - log.time[0]:.1f} s, {int((~valid).sum())} invalid (topic gaps); channels: {', '.join(log.channels)}")
         return 0
 
     parser.error(f"Unsupported command: {command}")

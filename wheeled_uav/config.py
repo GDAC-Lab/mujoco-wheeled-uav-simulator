@@ -29,6 +29,7 @@ __all__ = [
     "get_wheel_pair_mass",
     "get_wheels_config",
     "load_vehicle_params",
+    "merge_params",
     "parse_total_mass",
 ]
 
@@ -116,6 +117,17 @@ def _load_vehicle_params_cached(resolved_params_path: str) -> dict[str, Any]:
 
 def clear_vehicle_params_cache() -> None:
     _load_vehicle_params_cached.cache_clear()
+
+
+def merge_params(base: dict[str, Any], overrides: dict[str, Any] | None) -> dict[str, Any]:
+    """A copy of ``base`` with ``overrides`` merged in: objects merge key by key, anything else replaces."""
+    merged = copy.deepcopy(base)
+    for key, value in (overrides or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_params(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
 
 
 def load_vehicle_params(

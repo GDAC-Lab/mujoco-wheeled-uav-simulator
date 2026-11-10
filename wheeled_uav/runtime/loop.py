@@ -21,7 +21,8 @@ from ..timing import (
 )
 from .aerodynamics import AerodynamicsModel
 from .command_dispatcher import ControlCommandDispatcher
-from .fidelity import ActuatorModel
+from ..plant import PlantModel
+from .fidelity import ActuatorModel, ActuatorSnapshot
 from .parallel import ParallelPhysics
 from .scene import (
     SimulationRequest,
@@ -36,21 +37,33 @@ from .state_publisher import StatePayloadPublisher
 from .visuals import FrameRecorder, WallOverlayAnimator, configure_viewer
 
 __all__ = [
+    "SimulationRuntime",
     "run_headless_loop",
     "run_simulation",
     "run_viewer_loop",
 ]
 
 
-class _SimulationRuntime:
-    """Bundles the per-run runtime components shared by both loop flavors."""
+class SimulationRuntime:
+    """Bundles the per-run runtime components shared by the loops and the in-process Simulator."""
 
     def __init__(self, scene: SimulationScene):
         physics_threads = resolve_physics_threads(scene)
         if physics_threads > 0 and scene.request.record_path is not None:
             raise ValueError("--record is not supported with parallel physics (simulation.physics_threads)")
         self.scene = scene
-        self.state_publisher = StatePayloadPublisher(scene)
+        self.plant = None
+        if scene.plant is not None:
+            self.plant = PlantModel(
+                scene.model,
+                scene.params,
+                scene.plant,
+                scene.uav_specs,
+                scene.sensor_layouts,
+                seed=resolve_seed(scene),
+                surface_evaluator=scene.surface_evaluator,
+            )
+        self.state_publisher = StatePayloadPublisher(scene, plant=self.plant)
         self.command_dispatcher = ControlCommandDispatcher(
             scene.params, scene.fidelity, scene.request.num_uavs, seed=resolve_seed(scene)
         )
@@ -85,9 +98,14 @@ class _SimulationRuntime:
         self.parallel_physics = ParallelPhysics(scene, physics_threads) if physics_threads > 0 else None
 
     def _hooks_change_within_a_step_batch(self) -> bool:
-        # Actuator lag (HIL) and aerodynamics rewrite the controls or wrenches
-        # every physics step; without them a batch of steps can run in one go.
-        return self.scene.fidelity.mode == "hil" or self.aerodynamics_model.active
+        # Actuator lag (HIL), the plant model and aerodynamics rewrite the
+        # controls or wrenches every physics step (and the plant keeps a sensor
+        # history); without them a batch of steps can run in one go.
+        return self.scene.fidelity.mode == "hil" or self.aerodynamics_model.active or self.plant is not None
+
+    def _rebuild_wrench_rows(self) -> bool:
+        # Writers that add to xfrc_applied need the rows rebuilt from the command every step.
+        return self.aerodynamics_model.active or (self.plant is not None and self.plant.applies_body_forces)
 
     def advance(self, nstep: int) -> None:
         """Step the physics `nstep` times (one control period in lockstep)."""
@@ -118,8 +136,10 @@ class _SimulationRuntime:
         # aero active the rows must be rebuilt every step (its += needs a fresh
         # base); otherwise they are only touched while wrench commands are
         # active, so viewer drag perturbations on the vehicles work natively.
-        self.command_dispatcher.refresh_body_wrenches(scene.data, force_rebuild=self.aerodynamics_model.active)
+        self.command_dispatcher.refresh_body_wrenches(scene.data, force_rebuild=self._rebuild_wrench_rows())
         self.actuator_model.apply(scene.data)
+        if self.plant is not None:
+            self.plant.apply(scene.data)
         self.aerodynamics_model.apply(scene.data)
         self.overlay_animator.update(scene.data, active)
         self.frame_recorder.capture(scene.data, active)
@@ -127,8 +147,18 @@ class _SimulationRuntime:
             mujoco.mj_step(scene.model, scene.data)
         else:
             self.parallel_physics.step(scene.data, 1)
+        if self.plant is not None:
+            self.plant.restore(scene.data)
         self.actuator_model.restore(scene.data)
+        if self.plant is not None:
+            self.plant.record(scene.data)
         self.step_wall_seconds += time.perf_counter() - started
+
+    def actuator_snapshot(self):
+        """Commanded and applied rotor thrusts for the actuator log: the plant's rotor model when it has one."""
+        if self.plant is not None and (pair := self.plant.requested_and_applied()) is not None:
+            return ActuatorSnapshot(requested_ctrl=pair[0], applied_ctrl=pair[1])
+        return self.actuator_model.snapshot()
 
     def publish_state(self, sock, realtime_factor: float, session_timing: SessionTimingTracker) -> None:
         started = time.perf_counter()
@@ -147,7 +177,7 @@ class _SimulationRuntime:
             self.scene.request.state_target_ip,
             self.send_port,
             realtime_factor,
-            self.actuator_model.snapshot(),
+            self.actuator_snapshot(),
             aero_snapshot=self.aerodynamics_model.snapshot(),
             timing=timing,
             contact_reports=contact_reports,
@@ -173,7 +203,7 @@ class _SimulationRuntime:
 
 
 def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handle | None) -> None:
-    runtime = _SimulationRuntime(scene)
+    runtime = SimulationRuntime(scene)
     realtime_tracker = RealtimeTracker()
     lag_monitor = RealtimeLagMonitor()
     timestep = float(scene.model.opt.timestep)
@@ -204,6 +234,7 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
         hold_until_first_command = bool(scene.params.get("simulation", {}).get("hold_until_first_command", False))
     initial_qpos = scene.data.qpos.copy()
     initial_qvel = scene.data.qvel.copy()
+    was_holding = False
 
     try:
         with timer_context():
@@ -213,6 +244,11 @@ def _run_stepping_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
                 # under HIL delay/loss the plant should stay frozen until a
                 # command actually reaches it.
                 holding = hold_until_first_command and runtime.command_dispatcher.applied_command_count == 0
+                if was_holding and not holding and runtime.plant is not None:
+                    # Released like a vehicle already flying: the rotors start at
+                    # the first command's speed instead of spinning up from rest.
+                    runtime.plant.settle(scene.data)
+                was_holding = holding
                 runtime.step_physics_once()
                 if holding:
                     # Re-freeze AFTER the step so the published state is
@@ -262,7 +298,7 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
     A command that arrives but is thrown away (HIL packet loss, stale) is
     answered with a freshly published state, which the controller answers.
     """
-    runtime = _SimulationRuntime(scene)
+    runtime = SimulationRuntime(scene)
     publish_every = runtime.timing_config.state_publish_every_n_steps
     duration_seconds = scene.request.duration_seconds
     session_timing = SessionTimingTracker.start(scene.data.time, timing=runtime.timing_config)

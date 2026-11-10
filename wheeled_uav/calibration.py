@@ -21,6 +21,11 @@ Schema (``uav-propulsion-calibration/1``)::
       }
     }
 
+``motor_tau_ms`` goes to the plant model's ``plant.actuation`` (as
+``motor_time_constant_up_s``, which the down value follows unless set) when
+the params have an enabled ``plant.actuation`` section that does not set it
+itself, and to the HIL-only ``actuator_dynamics.motor_tau_ms`` otherwise.
+
 Entries in ``sim_params`` that are ``null`` (or absent) are skipped, so a
 calibration overrides only what it actually measured.
 """
@@ -38,6 +43,17 @@ _SUPPORTED_SCHEMA_VERSIONS = {1}
 
 # Announce each calibration file once per process, not on every params load.
 _announced_paths: set[str] = set()
+
+
+def _enabled_plant_actuation(params: dict[str, Any]) -> dict[str, Any] | None:
+    """The plant.actuation object when the plant model will use it (present and not disabled)."""
+    plant = params.get("plant")
+    if not isinstance(plant, dict) or plant.get("enabled", True) is False:
+        return None
+    actuation = plant.get("actuation")
+    if not isinstance(actuation, dict) or actuation.get("enabled", True) is False:
+        return None
+    return actuation
 
 
 def apply_calibration_file(params: dict[str, Any], params_path: Path) -> dict[str, Any]:
@@ -105,10 +121,18 @@ def apply_calibration_file(params: dict[str, Any], params_path: Path) -> dict[st
         value = float(motor_tau_ms)
         if value < 0.0:
             raise ValueError("calibration sim_params.motor_tau_ms must be >= 0")
-        actuator_section = params.setdefault("actuator_dynamics", {})
-        if isinstance(actuator_section, dict):
-            actuator_section["motor_tau_ms"] = value
-            applied["motor_tau_ms"] = value
+        plant_actuation = _enabled_plant_actuation(params)
+        if plant_actuation is not None:
+            # The plant model's rotors (every fidelity mode) take the bench value, unless the
+            # plant section sets its own time constant (an identified value, say), which wins.
+            if "motor_time_constant_up_s" not in plant_actuation:
+                plant_actuation["motor_time_constant_up_s"] = value / 1.0e3
+                applied["plant.actuation.motor_time_constant_up_s"] = value / 1.0e3
+        else:
+            actuator_section = params.setdefault("actuator_dynamics", {})
+            if isinstance(actuator_section, dict):
+                actuator_section["motor_tau_ms"] = value
+                applied["motor_tau_ms"] = value
 
     source = document.get("source")
     params["calibration_applied"] = {

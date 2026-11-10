@@ -72,6 +72,26 @@ class ApplyCalibrationTests(unittest.TestCase):
                 {"thrust_coefficient", "yaw_moment_ratio", "motor_tau_ms"},
             )
 
+    def test_motor_time_constant_goes_to_the_plant_model_when_it_has_rotors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            params_path = _write_params(directory, {"calibration_file": "calib.json"})
+            document = json.loads(params_path.read_text(encoding="utf-8"))
+            document["plant"] = {"actuation": {"delay_s": 0.004}}
+            params_path.write_text(json.dumps(document), encoding="utf-8")
+            _write_calibration(directory / "calib.json", {"motor_tau_ms": 35.0})
+
+            params = load_vehicle_params(params_path=params_path)
+
+            self.assertEqual(params["plant"]["actuation"]["motor_time_constant_up_s"], 0.035)
+            self.assertEqual(params["actuator_dynamics"]["motor_tau_ms"], 0.0)  # the HIL-only lag stays off
+            clear_vehicle_params_cache()
+            # A time constant set in the plant section (an identified value) wins over the bench value.
+            document["plant"]["actuation"]["motor_time_constant_up_s"] = 0.028
+            params_path.write_text(json.dumps(document), encoding="utf-8")
+            params = load_vehicle_params(params_path=params_path)
+            self.assertEqual(params["plant"]["actuation"]["motor_time_constant_up_s"], 0.028)
+
     def test_null_entries_are_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)

@@ -33,6 +33,8 @@
 
 `lockstep` のシミュレータはブロック中、遅れて起動したコントローラにも状態が届くよう、直前の状態パケットを 1 秒ごとにそのまま再送します。再送分は `sequence` も同じなので、重複サンプルの規則で読み捨てられ、2 回目のコマンドを誘発しません。届いたコマンドを捨てた場合（HIL のネットワークモデルによる損失や、古すぎるとの判定）は別で、コントローラはすでに答え終えているため、シミュレータはその場で現在の状態を新しい `sequence` で送り直し、コントローラに答え直してもらいます。
 
+HIL のネットワークモデルが遅らせた状態パケット（`network_fidelity.state_tx_latency_ms`、ジッタ）は、どのペーシングでも送る時刻が来た時点で送ります（送信と送信の間、`lockstep` がコマンドを待っている間、実行の終わり。最後の状態もコントローラに届きます）。この遅れは実時間で、`lockstep` では実行が遅くなるだけで、あるシミュレーション時刻にコントローラが見るものは変わりません。シミュレーション時間で古い測定値を渡すには、プラントモデルのセンサの遅れ（`plant.sensors`、[PLANT_MODEL.ja.md](PLANT_MODEL.ja.md)）を使います。
+
 **避けること:** コントローラが `sim_wall_skew` や `state.time` に合わせて wall clock で待つ「同期モード」。dead time が生じ、実時間より遅く感じる原因になります。
 
 リモート HIL では **`realtime`** を使い、シミュレータが実時間の主役、コントローラは待たずイベント駆動、という構成が自然です。
@@ -65,8 +67,9 @@
 | `simulation.viewer_fps` | ビューア `sync()` 上限 | `60` |
 | `simulation.pacing_mode` | 実時間ペーシング | `realtime`（HIL/対話）、`accelerated`（加速）、`lockstep`（決定論的コシミュレーション） |
 | `simulation.hold_until_first_command` | 最初のコマンド適用までスポーン時の状態（姿勢と初速度）で固定（自動実行の再現性確保） | 同梱 config は `true`、床置きスタートのプリセットは各自の JSON で `false` を設定、`lockstep` では無関係 |
+| `simulation.seed` | その実行のすべての乱数の種：HIL のネットワークの遅延と損失、センサ雑音、プラントモデルのセンサ雑音と欠測、`randomization` の抽選 | `0` |
 
-CLI 上書き: `simulate --pacing-mode accelerated`、`simulate --no-hold-until-first-command`
+CLI 上書き: `simulate --pacing-mode accelerated`、`simulate --no-hold-until-first-command`、`simulate --seed 3`
 
 **制御周期** = `timestep × state_publish_every_n_steps`（コントローラ側の公称 dt は `timing.control_period_seconds` から取得すること）
 

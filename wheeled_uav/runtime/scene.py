@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -10,8 +11,10 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from ..calibration import apply_calibration_file
 from ..config import build_fidelity_config, load_vehicle_params
 from ..model.builder import render_model_xml
+from ..plant import PlantConfig, apply_randomization, parse_plant_config, write_randomization_record
 from ..model.surface import get_surface_config
 from ..paths import DEFAULT_PATH_RESOLVER, PathResolver
 from ..protocol import UDP_IP, get_instance_ports
@@ -80,6 +83,9 @@ class RenderedModelArtifacts:
     model_xml_path: Path
     surface_evaluator: SurfaceEvaluator | None
     uav_specs: list[UAVModelSpec]
+    # The values the randomization section drew (empty without one), and the file they were written to.
+    randomization_draws: tuple[dict[str, Any], ...] = ()
+    randomization_record_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +106,10 @@ class SimulationScene:
     # The resolver the scene was rendered with (None: the default one), for
     # models rendered later from the same params (parallel physics).
     path_resolver: PathResolver | None = None
+    # The plant section, parsed (None: no plant model).
+    plant: PlantConfig | None = None
+    # The values the randomization section drew for this run (already in params).
+    randomization_draws: tuple[dict[str, Any], ...] = ()
 
 
 def _get_sensor_slice(model: mujoco.MjModel, sensor_name: str) -> slice:
@@ -154,9 +164,23 @@ def render_simulation_model(
     request: SimulationRequest,
     *,
     path_resolver: PathResolver | None = None,
+    params: dict[str, Any] | None = None,
 ) -> RenderedModelArtifacts:
+    """Render the model XML for ``request``.
+
+    ``params``, when given, is used instead of loading ``request.params_path``
+    (a copy is taken; relative paths in it still resolve against the
+    directory of ``request.params_path``, the repository default without one).
+    """
     resolver = path_resolver or DEFAULT_PATH_RESOLVER
-    params = load_vehicle_params(params_path=request.params_path, path_resolver=resolver)
+    if params is None:
+        params = load_vehicle_params(params_path=request.params_path, path_resolver=resolver)
+    else:
+        params = apply_calibration_file(copy.deepcopy(params), resolver.get_params_path(request.params_path))
+    # Draw the randomized parameters before anything reads them: mass, inertia
+    # and geometry go into the XML, the plant parameters into the plant model.
+    seed = resolve_seed_from_params(params, request.seed)
+    params, draws = apply_randomization(params, seed=seed)
     model_xml_path, surface_evaluator, uav_specs = render_model_xml(
         params,
         instance_id=request.instance_id,
@@ -167,23 +191,58 @@ def render_simulation_model(
         path_resolver=resolver,
         params_dir=resolver.get_params_path(request.params_path).parent,
     )
+    record_path = write_randomization_record(model_xml_path, seed, draws) if draws else None
     return RenderedModelArtifacts(
         params=params,
         model_xml_path=model_xml_path,
         surface_evaluator=surface_evaluator,
         uav_specs=uav_specs,
+        randomization_draws=tuple(draws),
+        randomization_record_path=record_path,
     )
+
+
+def _check_plant_against_hil_effects(plant: PlantConfig | None, fidelity: FidelityConfig) -> None:
+    """The plant model replaces the HIL-only actuator lag and sensor noise; both at once would apply twice."""
+    if plant is None or fidelity.mode != "hil":
+        return
+    dynamics = fidelity.actuator_dynamics
+    if plant.actuation is not None and (
+        dynamics.motor_tau_ms > 0.0 or dynamics.thrust_rate_limit_n_per_s is not None or dynamics.omega_rate_limit_rad_per_s is not None
+    ):
+        raise ValueError(
+            "plant.actuation and the HIL actuator_dynamics both model the rotors; "
+            "set the motor time constants in plant.actuation and clear actuator_dynamics"
+        )
+    noise = fidelity.sensor_fidelity
+    if plant.sensors is not None and any(
+        value > 0.0
+        for value in (
+            noise.position_noise_std_m,
+            noise.velocity_noise_std_m_per_s,
+            noise.angular_velocity_noise_std_rad_per_s,
+            noise.attitude_noise_std_rad,
+        )
+    ):
+        raise ValueError(
+            "plant.sensors and the HIL sensor_fidelity both add sensor noise; set the noise in plant.sensors and clear sensor_fidelity"
+        )
 
 
 def load_simulation_scene(
     request: SimulationRequest,
     *,
     path_resolver: PathResolver | None = None,
+    params: dict[str, Any] | None = None,
 ) -> SimulationScene:
-    rendered_model = render_simulation_model(request, path_resolver=path_resolver)
+    """Build the scene for ``request`` (``params``: see render_simulation_model)."""
+    rendered_model = render_simulation_model(request, path_resolver=path_resolver, params=params)
     fidelity = build_fidelity_config(rendered_model.params)
     if request.fidelity_mode is not None and request.fidelity_mode != fidelity.mode:
         fidelity = replace(fidelity, mode=request.fidelity_mode)  # type: ignore[arg-type]
+    resolver = path_resolver or DEFAULT_PATH_RESOLVER
+    plant = parse_plant_config(rendered_model.params, params_dir=resolver.get_params_path(request.params_path).parent)
+    _check_plant_against_hil_effects(plant, fidelity)
     model = mujoco.MjModel.from_xml_path(str(rendered_model.model_xml_path))
     data = mujoco.MjData(model)
     apply_initial_velocities(model, data, rendered_model.uav_specs)
@@ -201,6 +260,8 @@ def load_simulation_scene(
         geom_names=build_geom_name_lookup(model),
         contact_attribution=build_contact_attribution(model, rendered_model.uav_specs),
         path_resolver=path_resolver,
+        plant=plant,
+        randomization_draws=rendered_model.randomization_draws,
     )
 
 
@@ -275,8 +336,22 @@ def validate_model(
                 "ngeom": int(model.ngeom),
                 "nsensor": int(model.nsensor),
                 "nu": int(model.nu),
+                "plant": _plant_summary(rendered_model, path_resolver, request),
+                "randomized_parameters": [draw["path"] for draw in rendered_model.randomization_draws],
+                "randomization_record": None
+                if rendered_model.randomization_record_path is None
+                else str(rendered_model.randomization_record_path),
             },
             ensure_ascii=False,
         )
     )
     return 0
+
+
+def _plant_summary(rendered_model: RenderedModelArtifacts, path_resolver: PathResolver | None, request: SimulationRequest) -> list[str]:
+    """The plant subsections in effect (and a check that the section parses)."""
+    resolver = path_resolver or DEFAULT_PATH_RESOLVER
+    plant = parse_plant_config(rendered_model.params, params_dir=resolver.get_params_path(request.params_path).parent)
+    if plant is None:
+        return []
+    return [name for name in ("actuation", "battery", "aerodynamics", "correction", "sensors") if getattr(plant, name) is not None]

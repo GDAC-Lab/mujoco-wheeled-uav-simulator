@@ -44,9 +44,11 @@ Current implemented behavior:
 - first-order actuator lag and rotor thrust or omega rate limiting from `actuator_dynamics`
 - additive sensor noise and truth logging from `sensor_fidelity` and `logging_config`
 
-Not modeled:
+Not modeled by the HIL effects (the plant model covers the delays, the bias and dropouts in every mode, see [PLANT_MODEL.md](PLANT_MODEL.md)):
 
 - sensor bias, quantization, or delayed measurement export beyond the additive-noise model
+
+The HIL actuator lag and sensor noise change the plant with the network-test mode. For physical-fidelity studies, prefer the `plant` section: it applies in `baseline` as well, so the network model can be switched on and off without changing the plant. Using both for the same effect is refused.
 
 ## Remote Evaluation Tracks
 

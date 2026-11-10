@@ -268,6 +268,24 @@ class ControlCommandDispatcher:
         self._stats.last_applied_policy = "fresh"
         self.applied_command_count += 1
 
+    def apply_command(
+        self,
+        data: mujoco.MjData,
+        rotor_thrusts_by_uav: list[list[float]],
+        body_wrenches: list[list[float]] | None = None,
+    ) -> None:
+        """Apply a command directly, as a fresh command packet would be (in-process callers, no network)."""
+        if len(rotor_thrusts_by_uav) != self._num_uavs:
+            raise ValueError(f"expected rotor thrusts for {self._num_uavs} UAV(s), got {len(rotor_thrusts_by_uav)}")
+        if body_wrenches is not None and len(body_wrenches) != self._num_uavs:
+            raise ValueError(f"expected body wrenches for {self._num_uavs} UAV(s), got {len(body_wrenches)}")
+        self._last_command = [[float(thrust) for thrust in rotor_thrusts] for rotor_thrusts in rotor_thrusts_by_uav]
+        apply_thrust_command(data, self._last_command)
+        self._last_body_wrenches = None if body_wrenches is None else [[float(value) for value in wrench] for wrench in body_wrenches]
+        self.has_received_command = True
+        self._stats.last_applied_policy = "fresh"
+        self.applied_command_count += 1
+
     def refresh_body_wrenches(self, data: mujoco.MjData, *, force_rebuild: bool = False) -> None:
         """Re-assert the command-owned external wrench rows, once per physics step.
 

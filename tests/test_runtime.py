@@ -400,8 +400,9 @@ class CommandDispatcherTests(unittest.TestCase):
         applied = dispatcher.wait_for_command(_FakeSocket(), _FakeData(4), service=service, timeout_seconds=0.05)
 
         self.assertFalse(applied)
-        # Without the wake-ups it would be called once and the loop would sleep until the timeout.
-        self.assertGreater(len(calls), 5)
+        # Without the wake-ups it would be called once and the loop would sleep until the timeout
+        # (at least 3 calls even where sleeps are as coarse as Windows' 15.6 ms tick).
+        self.assertGreaterEqual(len(calls), 3)
 
     def test_wait_for_command_wakes_when_a_delayed_command_falls_due(self) -> None:
         fidelity = FidelityConfig(mode="hil", network=NetworkFidelityConfig(enabled=True, command_rx_latency_ms=30.0))

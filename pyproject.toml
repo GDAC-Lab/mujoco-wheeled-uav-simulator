@@ -18,6 +18,8 @@ dependencies = [
 # pyserial is required for pymavlink's serial (USB) transport — without it,
 # mavlink_connection("COM4") fails with "No module named 'serial'".
 hil = ["pymavlink>=2.4.41", "pyserial>=3.5"]
+# PX4 ULog to flight log (wheeled_uav.flightlog_ulog, `convert-ulog`): `uv sync --extra logs`
+logs = ["pyulog>=1.1"]
 
 [project.scripts]
 mujoco-wheeled-uav-simulator = "wheeled_uav.cli:main"

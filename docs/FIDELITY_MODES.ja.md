@@ -44,9 +44,11 @@
 - `actuator_dynamics` による一次遅れとロータ推力または角速度の rate limit
 - `sensor_fidelity` と `logging_config` による加法ノイズ注入と truth 保存
 
-モデル化していないもの:
+HIL の効果ではモデル化していないもの（遅れ・バイアス・欠測は、プラントモデルがどのモードでも表します。[PLANT_MODEL.ja.md](PLANT_MODEL.ja.md) 参照）:
 
 - 加法ノイズモデルを超える sensor bias, quantization, delayed measurement
+
+HIL のアクチュエータの遅れとセンサ雑音は、ネットワーク試験のモードと一緒にプラントを変えてしまいます。物理の忠実度を調べるときは `plant` セクションを使ってください。`baseline` でも効くので、プラントを変えずにネットワークのモデルだけを入り切りできます。同じ効果を両方で入れるとエラーにします。
 
 ## リモート評価の 2 トラック
 

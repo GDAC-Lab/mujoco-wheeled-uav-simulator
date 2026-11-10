@@ -17,6 +17,7 @@ from ..protocol import build_packet_metadata
 from ..state_packets import encode_state_packet
 from ..types import SensorLayout, UAVModelSpec
 from .contact import build_contact_reports
+from ..plant import MeasuredState, PlantModel
 from .fidelity import ActuatorSnapshot, apply_sensor_fidelity
 from .scene import SimulationScene, resolve_seed, resolve_state_format
 
@@ -45,6 +46,8 @@ def _build_uav_state(
     actuator_snapshot: ActuatorSnapshot | None,
     contact_report: dict[str, Any],
     aero_entry: dict[str, object] | None = None,
+    measurement: MeasuredState | None = None,
+    plant_entry: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     data, fidelity = scene.data, scene.fidelity
     true_position = np.array(data.sensordata[sensor_layout.position], copy=True)
@@ -57,14 +60,21 @@ def _build_uav_state(
             data.sensordata[sensor_layout.z_axis],
         )
     )
-    position, linear_velocity, angular_velocity_world, rotation_matrix = apply_sensor_fidelity(
-        true_position,
-        true_linear_velocity,
-        true_angular_velocity_world,
-        true_rotation_matrix,
-        fidelity,
-        sensor_rng,
-    )
+    if measurement is not None:
+        # The plant's sensor model (delays, noise, bias, dropouts) replaces the HIL noise.
+        position = measurement.position
+        linear_velocity = measurement.velocity
+        angular_velocity_world = measurement.angular_velocity_world
+        rotation_matrix = measurement.rotation_matrix
+    else:
+        position, linear_velocity, angular_velocity_world, rotation_matrix = apply_sensor_fidelity(
+            true_position,
+            true_linear_velocity,
+            true_angular_velocity_world,
+            true_rotation_matrix,
+            fidelity,
+            sensor_rng,
+        )
     angular_velocity_body = rotation_matrix.T @ angular_velocity_world
     true_angular_velocity_body = true_rotation_matrix.T @ true_angular_velocity_world
 
@@ -102,6 +112,8 @@ def _build_uav_state(
         }
     if aero_entry is not None:
         uav_state["aero"] = aero_entry
+    if plant_entry is not None:
+        uav_state["plant"] = plant_entry
     if fidelity.logging.log_sensor_truth:
         uav_state["sensor_truth"] = {
             "position": true_position.tolist(),
@@ -125,6 +137,8 @@ def build_state_payload(
     timing: dict[str, float] | None = None,
     contact_reports: list[dict[str, Any]] | None = None,
     state_format: str = "json",
+    measurements: list[MeasuredState] | None = None,
+    plant_snapshot: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Serialize the scene state into a single-UAV or multi-UAV state packet.
 
@@ -132,6 +146,9 @@ def build_state_payload(
     own contacts, for runtimes that step the vehicles elsewhere. `state_format`
     "binary" encodes the same content compactly (see wheeled_uav.state_packets),
     with the contact summaries but without the per-contact details.
+    `measurements` (one per UAV, from the plant's sensor model) replace the
+    true state in the measured fields; `plant_snapshot` adds the per-UAV
+    ``plant`` block (JSON only).
     """
     if contact_reports is None:
         contact_reports = build_contact_reports(
@@ -143,6 +160,14 @@ def build_state_payload(
             include_details=scene.fidelity.logging.include_contact_details and state_format == "json",
             attribution=scene.contact_attribution,
         )
+    plant_entries: list[dict[str, Any] | None] = [None] * len(scene.uav_specs)
+    if state_format != "binary" and (plant_snapshot is not None or measurements is not None):
+        # The per-UAV "plant" block (JSON only): the plant's snapshot and the measurement's age.
+        for uav_index in range(len(scene.uav_specs)):
+            entry = {} if plant_snapshot is None else dict(plant_snapshot[uav_index])
+            if measurements is not None:
+                entry["measurement_age_s"] = float(measurements[uav_index].measurement_age_s)
+            plant_entries[uav_index] = entry
     uav_states = [
         _build_uav_state(
             scene,
@@ -153,6 +178,8 @@ def build_state_payload(
             actuator_snapshot,
             contact_reports[uav_index],
             aero_entry=None if aero_snapshot is None else aero_snapshot[uav_index],
+            measurement=None if measurements is None else measurements[uav_index],
+            plant_entry=plant_entries[uav_index],
         )
         for uav_index, (sensor_layout, uav_spec) in enumerate(zip(scene.sensor_layouts, scene.uav_specs, strict=True))
     ]
@@ -196,8 +223,9 @@ def build_state_payload(
 class StatePayloadPublisher:
     """Publishes state packets, optionally through the HIL network model."""
 
-    def __init__(self, scene: SimulationScene):
+    def __init__(self, scene: SimulationScene, plant: PlantModel | None = None):
         self._scene = scene
+        self._plant = plant
         self._sequence = 0
         self._last_payload: bytes | None = None
         self._pending_datagrams: list[PendingDatagram] = []
@@ -290,6 +318,7 @@ class StatePayloadPublisher:
         timing: dict[str, float] | None = None,
         contact_reports: list[dict[str, Any]] | None = None,
     ) -> bytes:
+        plant = self._plant
         return build_state_payload(
             self._scene,
             realtime_factor,
@@ -301,6 +330,8 @@ class StatePayloadPublisher:
             timing=timing,
             contact_reports=contact_reports,
             state_format=self._state_format,
+            measurements=None if plant is None else plant.measure(self._scene.data),
+            plant_snapshot=None if plant is None else plant.snapshot(),
         )
 
     def send_state(
