@@ -51,6 +51,16 @@ Fidelity-mode usage and publication-oriented logging notes are summarized in [do
 - A local environment capable of showing the MuJoCo GUI
 - MATLAB
 
+`uv sync` installs MuJoCo 4.0 from `uv.lock` (the package declares `mujoco>=3.6.0`; the test suite passes on 3.6.0 and
+4.0.1). Notes on MuJoCo 4:
+
+- MuJoCo 4 splits the Python package into `mujoco-core` and `mujoco-studio`. `uv sync` swaps an existing 3.x
+  environment over by itself; in an environment managed with pip, run `pip uninstall -y mujoco` before upgrading.
+- With `simulation.integrator` set to `RK4`, MuJoCo 4 integrates the orientation of free and ball joints to fourth
+  order, so trajectories differ slightly from MuJoCo 3. The default (`Euler`) is unchanged.
+- The viewer's headlight defaults to `auto`, so scenes can look brighter or darker than with MuJoCo 3. The physics is
+  not affected.
+
 ## Quick Start
 
 Install dependencies:

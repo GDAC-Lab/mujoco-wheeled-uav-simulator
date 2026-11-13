@@ -51,6 +51,15 @@ English documentation: [README.md](README.md)
 - MuJoCo の GUI を表示できるローカル実行環境
 - MATLAB
 
+`uv sync` は `uv.lock` から MuJoCo 4.0 を入れます（パッケージの指定は `mujoco>=3.6.0`。テストは 3.6.0 と 4.0.1 で通ります）。
+MuJoCo 4 での注意:
+
+- MuJoCo 4 では Python のパッケージが `mujoco-core` と `mujoco-studio` に分かれました。`uv sync` は 3.x の環境を自動で
+  入れ替えます。pip で管理している環境では、上げる前に `pip uninstall -y mujoco` を実行してください。
+- `simulation.integrator` を `RK4` にしている場合、MuJoCo 4 では free・ball 関節の姿勢が 4 次精度で積分されるため、
+  軌道が MuJoCo 3 とわずかに変わります。既定（`Euler`）は変わりません。
+- ビューアのヘッドライトの既定が `auto` になり、MuJoCo 3 と明るさが違って見えることがあります。物理には影響しません。
+
 ## クイックスタート
 
 依存関係を入れます。
