@@ -12,6 +12,8 @@ per-UAV fields under ``uavs`` or use flat nested lists):
   body_wrench(es)           6-element WORLD-frame external wrench applied via
                             xfrc_applied in addition to the rotor thrusts
                             (tilt-rotor emulation) — distinct from ``wrench``
+  extensions                {extension name: command} for the scene's extensions
+                            (top level, also in multi-UAV packets; docs/EXTENSIONS.md)
 
 This module is deliberately free of MuJoCo imports so controller processes can
 run on machines without a MuJoCo installation.
@@ -79,6 +81,8 @@ class CommandPacket:
     # rotors keep the body aloft/upright while the wrench supplies the
     # tangential drive and yaw that a tilting rotor set would produce.
     body_wrenches: list[list[float]] | None = None
+    # Optional commands for the scene's extensions: {extension name: command (any JSON value)}.
+    extension_commands: dict[str, Any] | None = None
 
 
 def build_packet_metadata(
@@ -221,6 +225,23 @@ def _parse_single_body_wrench(control_input: dict[str, object]) -> list[list[flo
     return [[float(component) for component in body_wrench]]
 
 
+_warned_extension_fields: set[str] = set()
+
+
+def _parse_extension_commands(control_input: dict[str, object]) -> dict[str, Any] | None:
+    # Optional {extension name: command}; the values go to the extensions as they are.
+    commands = control_input.get("extensions")
+    if commands is None:
+        return None
+    if isinstance(commands, dict) and all(isinstance(name, str) for name in commands):
+        return dict(commands) or None
+    kind = type(commands).__name__
+    if kind not in _warned_extension_fields:
+        _warned_extension_fields.add(kind)
+        print(f"warning: ignoring the extensions field of a command packet: expected an object {{name: command}}, got {kind}")
+    return None
+
+
 def parse_command_packet(
     control_input: dict[str, object],
     params: dict[str, Any],
@@ -235,6 +256,7 @@ def parse_command_packet(
     return CommandPacket(
         rotor_thrusts=rotor_thrusts,
         body_wrenches=_parse_single_body_wrench(control_input),
+        extension_commands=_parse_extension_commands(control_input),
         metrics=_build_packet_metrics(
             control_input,
             receive_time_ns=resolved_receive_time_ns,
@@ -360,6 +382,7 @@ def parse_multi_uav_command_packet(
     return CommandPacket(
         rotor_thrusts=rotor_thrusts,
         body_wrenches=body_wrenches,
+        extension_commands=_parse_extension_commands(control_input),
         metrics=_build_packet_metrics(
             control_input,
             receive_time_ns=resolved_receive_time_ns,

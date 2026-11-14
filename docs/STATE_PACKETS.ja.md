@@ -2,7 +2,7 @@
 
 シミュレータは `simulation.state_publish_every_n_steps` 物理ステップごとに 1 つの状態パケットを、1 つの UDP データグラムとして送ります。符号化の形式は `simulation.state_format`（または `simulate --state-format`）で選びます。
 
-- `json`（既定）: 1 つの JSON オブジェクト。単体機のパケットは機体のフィールドを最上位に持ち、複数機のパケットは `uavs` の下に並べます。`timing` ブロックは [TIMING.ja.md](TIMING.ja.md) を参照してください。
+- `json`（既定）: 1 つの JSON オブジェクト。単体機のパケットは機体のフィールドを最上位に持ち、複数機のパケットは `uavs` の下に並べます。`timing` ブロックは [TIMING.ja.md](TIMING.ja.md) を、拡張のある場面の `extensions` オブジェクトは [EXTENSIONS.ja.md](EXTENSIONS.ja.md) を参照してください。
 - `binary`: 同じ状態を、下に示す固定のリトルエンディアンのレイアウトで送ります。大きさは JSON のパケットの約 4 分の 1 で、シミュレータ側の作成も軽く、約 170 機までが 1 データグラムに収まります（JSON のパケットは 1 機あたり約 1.5 KiB 増え、約 40 機で UDP データグラムの上限 65,507 バイトを超えます）。MATLAB では `jsondecode` が速いので、解読時間は JSON とほぼ同じです。
 
 どちらのデコーダも、バイナリのパケットを同じ状態の JSON パケットと全く同じ結果に解読するので、コントローラはどちらの形式でも受け取れます。
@@ -10,7 +10,7 @@
 - Python: `wheeled_uav.state_packets.decode_state_packet(datagram)` は `json.loads` と同じ dict を返します。
 - MATLAB: `uavsim.Protocol.decode_state(datagram)` は `jsondecode` と同じ構造体を返します。`uavsim.Protocol.read_latest_state` はこれを使います。
 
-バイナリのパケットは接触の集計を含みますが、接触 1 件ごとの詳細は含みません（`contacts` は空のリストに解読されます）。アクチュエータの統計（`logging_config.log_actuator_stats`）、センサ真値（`logging_config.log_sensor_truth`）、空力のログが有効なときは、バイナリ形式ではシミュレータが起動しません。
+バイナリのパケットは接触の集計を含みますが、接触 1 件ごとの詳細は含みません（`contacts` は空のリストに解読されます）。アクチュエータの統計（`logging_config.log_actuator_stats`）、センサ真値（`logging_config.log_sensor_truth`）、空力のログが有効なとき、パラメータに拡張があるときは、バイナリ形式ではシミュレータが起動しません。
 
 ## バイナリのレイアウト（レイアウト版 1）
 

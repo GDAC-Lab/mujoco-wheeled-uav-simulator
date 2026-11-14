@@ -16,7 +16,10 @@ A step applies the command as a fresh command packet would, advances one
 control period (``simulation.state_publish_every_n_steps`` physics steps),
 and returns the state packet the UDP simulator would publish then (parsed
 JSON; for several UAVs, the multi-UAV packet with its ``uavs`` list). The HIL
-network model is not used (there is no network); the plant model is.
+network model is not used (there is no network); the plant model is. The
+params' extensions take part as in the UDP simulator: ``step(...,
+extensions={name: command})`` commands them, ``state["extensions"]`` reports
+them and ``sim.extensions[name]`` is the object itself (docs/EXTENSIONS.md).
 """
 
 from __future__ import annotations
@@ -122,6 +125,11 @@ class Simulator:
         return float(self.scene.data.time)
 
     @property
+    def extensions(self):
+        """The scene's extensions (a SceneExtensions: ``sim.extensions["name"]``), None without any."""
+        return self.scene.extensions
+
+    @property
     def steps_per_control_period(self) -> int:
         return resolve_timing_config(self.scene).state_publish_every_n_steps
 
@@ -142,11 +150,14 @@ class Simulator:
         *,
         steps: int | None = None,
         body_wrenches: Any = None,
+        extensions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Apply ``rotor_thrusts`` [N] (4 values, or one list of 4 per UAV) and advance; return the new state.
 
         ``steps`` physics steps (default: one control period). ``body_wrenches``:
         an optional world-frame [fx, fy, fz, tx, ty, tz] per UAV, as in a command packet.
+        ``extensions``: {extension name: command} for the scene's extensions, as the
+        ``extensions`` field of a command packet (docs/EXTENSIONS.md).
         """
         runtime = self.runtime
         thrusts = np.asarray(rotor_thrusts, dtype=float)
@@ -156,7 +167,7 @@ class Simulator:
         if body_wrenches is not None:
             wrenches = np.asarray(body_wrenches, dtype=float)
             wrenches = (wrenches[None, :] if wrenches.ndim == 1 else wrenches).tolist()
-        runtime.command_dispatcher.apply_command(runtime.scene.data, thrusts.tolist(), wrenches)
+        runtime.command_dispatcher.apply_command(runtime.scene.data, thrusts.tolist(), wrenches, extension_commands=extensions)
         count = self.steps_per_control_period if steps is None else int(steps)
         if count < 1:
             raise ValueError("steps must be at least 1")

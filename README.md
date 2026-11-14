@@ -12,6 +12,8 @@
 
 **Plant model** (opt-in; rotor delay and lag, thrust calibration error, battery sag, drag and ground effect, a data-fitted correction, sensor delays, noise, bias and dropouts, parameter randomization) and the in-process `Simulator`: [docs/PLANT_MODEL.md](docs/PLANT_MODEL.md). **System identification** from flight logs (delay, motor time constant, thrust scale, drag, battery, k-step prediction error): [docs/SYSTEM_IDENTIFICATION.md](docs/SYSTEM_IDENTIFICATION.md). Japanese in the `.ja.md` files next to them.
 
+**Scene extensions** (opt-in; your own Python code adds bodies, joints and the forces on them to the scene, takes commands from the controller and reports a state of its own in the state packets): [docs/EXTENSIONS.md](docs/EXTENSIONS.md) — Japanese in [docs/EXTENSIONS.ja.md](docs/EXTENSIONS.ja.md).
+
 Fidelity-mode usage and publication-oriented logging notes are summarized in [docs/FIDELITY_MODES.md](docs/FIDELITY_MODES.md).
 
 **Time synchronization** (simulator time vs wall clock, UDP sample cadence, controller rules): [docs/TIMING.md](docs/TIMING.md) — Japanese summary in [docs/TIMING.ja.md](docs/TIMING.ja.md).
@@ -156,6 +158,7 @@ Single-UAV controller packet contract used by both MATLAB and Python hover contr
 - `position`, `velocity`, and `angular_velocity_body` are 3-element vectors.
 - `rotation_matrix` is a flattened 3x3 rotation matrix in row-major order.
 - Controller command packets are JSON objects containing `rotor_thrusts`, `rotor_omega` (4-element vectors), or `wrench` (`[f_z, M_x, M_y, M_z]` body wrench, distributed through the pseudo-inverse of the geometry-derived allocation matrix).
+- With scene extensions in the params, command packets may carry `extensions` ({name: command}) and state packets carry their `extensions` states ([docs/EXTENSIONS.md](docs/EXTENSIONS.md)).
 - `hover-controller` is for single-UAV packets only; if it receives a multi-UAV packet with `uavs`, it stops with an error.
 - Controller-side allocation (Python and MATLAB) is derived from the per-rotor geometry in `actuation.rotors` (position, thrust axis, spin sign), so arbitrary rotor ordering and fixed-tilt rotors are handled consistently with the generated MuJoCo actuators.
 
@@ -263,6 +266,7 @@ This repository is intended as a reusable simulator base plus a few samples. To 
 | `wheeled_uav/controllers/` | Reference controllers (`hover.py`); importable without MuJoCo for controller-only hosts. |
 | `wheeled_uav/plant/` | Plant model (`plant` section): actuation, battery, drag and ground effect, data-fitted correction, sensors, randomization ([docs/PLANT_MODEL.md](docs/PLANT_MODEL.md)). |
 | `wheeled_uav/sim.py` | In-process `Simulator`: the same scene and plant stepped from Python, without UDP. |
+| `wheeled_uav/extensions/` | Scene extensions (`extensions` section): the loader, the calls each step, and the `Marker` example ([docs/EXTENSIONS.md](docs/EXTENSIONS.md)). |
 | `wheeled_uav/flightlog.py`, `flightlog_ulog.py` | Neutral flight-log format, and PX4 ULog conversion. |
 | `wheeled_uav/sysid/` | System identification and k-step prediction error ([docs/SYSTEM_IDENTIFICATION.md](docs/SYSTEM_IDENTIFICATION.md)). |
 

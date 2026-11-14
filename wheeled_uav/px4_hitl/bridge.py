@@ -347,6 +347,9 @@ def run_bridge(
                 if plant_model is not None:
                     plant_model.apply(data)
                 aerodynamics_model.apply(data)
+                if scene.extensions is not None:
+                    # Extensions take no commands here (the board sends rotor outputs only).
+                    scene.extensions.before_step(model, data)
                 mujoco.mj_step(model, data)
                 if plant_model is not None:
                     plant_model.restore(data)

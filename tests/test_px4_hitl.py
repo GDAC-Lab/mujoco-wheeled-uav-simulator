@@ -377,3 +377,36 @@ def test_bridge_disarms_on_exit_when_auto_armed():
     config = HilConfig(device="FAKE", auto_arm=True, arm_after_s=0.0, takeoff_alt_m=None)
     run_bridge(config, request, link=link)
     assert link.disarm_requests >= 1 and not link.armed
+
+
+def test_bridge_steps_the_extensions(tmp_path, monkeypatch):
+    # Extensions are physics: the bridge calls them before every step, as the UDP loops do.
+    from wheeled_uav.config import load_vehicle_params
+
+    folder = tmp_path / "hitl_extensions"
+    folder.mkdir()
+    (folder / "step_counter_extension.py").write_text(
+        "from wheeled_uav.extensions import Extension\n"
+        "class StepCounter(Extension):\n"
+        "    steps = 0\n"
+        "    def before_step(self, model, data):\n"
+        "        self.steps += 1\n",
+        encoding="utf-8",
+    )
+    params = load_vehicle_params()
+    params["extensions"] = {"counter": {"class": "step_counter_extension:StepCounter", "path": str(folder)}}
+    params_path = tmp_path / "vehicle_params.counter.json"
+    params_path.write_text(json.dumps(params), encoding="utf-8")
+    request = SimulationRequest(headless=True, duration_seconds=0.1, hold_until_first_command=False, params_path=params_path, generated_xml_dir=tmp_path)
+    import wheeled_uav.px4_hitl.bridge as bridge
+
+    scenes = []
+
+    def keep_scene(request):
+        scenes.append(load_simulation_scene(request))
+        return scenes[-1]
+
+    monkeypatch.setattr(bridge, "load_simulation_scene", keep_scene)
+    stats = run_bridge(HilConfig(device="FAKE", mode="ev"), request, link=FakeLink(controls=[0.3] * 4 + [0.0] * 12))
+    assert stats.steps > 0
+    assert scenes[0].extensions["counter"].steps == stats.steps

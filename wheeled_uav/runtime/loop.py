@@ -51,7 +51,17 @@ class SimulationRuntime:
         physics_threads = resolve_physics_threads(scene)
         if physics_threads > 0 and scene.request.record_path is not None:
             raise ValueError("--record is not supported with parallel physics (simulation.physics_threads)")
+        if scene.extensions is not None:
+            # Parallel physics steps each vehicle in a world of its own, without what the extensions added.
+            if physics_threads > 0:
+                raise ValueError("extensions are not supported with parallel physics (simulation.physics_threads)")
+            if resolve_state_format(scene) == "binary":
+                raise ValueError(
+                    'simulation.state_format "binary" carries no extension states; use the JSON state format '
+                    "while the params have extensions"
+                )
         self.scene = scene
+        self.extensions = scene.extensions
         self.plant = None
         if scene.plant is not None:
             self.plant = PlantModel(
@@ -68,6 +78,7 @@ class SimulationRuntime:
             scene.params, scene.fidelity, scene.request.num_uavs, seed=resolve_seed(scene)
         )
         self.command_dispatcher.bind_bodies(scene.model, scene.uav_specs)
+        self.command_dispatcher.bind_extensions(scene.extensions)
         self.actuator_model = ActuatorModel(
             scene.model,
             scene.fidelity,
@@ -141,6 +152,9 @@ class SimulationRuntime:
         if self.plant is not None:
             self.plant.apply(scene.data)
         self.aerodynamics_model.apply(scene.data)
+        if self.extensions is not None:
+            # Last before the step: extensions see this step's rotor and wrench inputs.
+            self.extensions.before_step(scene.model, scene.data)
         self.overlay_animator.update(scene.data, active)
         self.frame_recorder.capture(scene.data, active)
         if self.parallel_physics is None:

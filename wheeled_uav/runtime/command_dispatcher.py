@@ -19,6 +19,7 @@ import mujoco
 
 from ..config import parse_total_mass
 from ..clock import wall_time_ns
+from ..extensions import SceneExtensions
 from ..protocol import (
     CommandPacket,
     receive_control_command,
@@ -106,6 +107,9 @@ class ControlCommandDispatcher:
         # Body ids for optional external body-wrench application (tilt-rotor
         # emulation); populated by bind_bodies once the model is built.
         self._uav_body_ids: list[int] | None = None
+        # The scene's extensions, which take the "extensions" part of each applied command.
+        self._extensions: SceneExtensions | None = None
+        self._warned_extension_commands = False
 
     def bind_bodies(self, model: mujoco.MjModel, uav_specs: list[UAVModelSpec]) -> None:
         self._uav_body_ids = []
@@ -115,6 +119,21 @@ class ControlCommandDispatcher:
                 # -1 would silently write wrenches onto the LAST body instead.
                 raise ValueError(f"UAV body {spec.body_name!r} not found in the compiled model")
             self._uav_body_ids.append(body_id)
+
+    def bind_extensions(self, extensions: SceneExtensions | None) -> None:
+        self._extensions = extensions
+
+    def _apply_extension_commands(self, commands: dict[str, Any] | None, *, strict: bool) -> None:
+        if not commands:
+            return
+        if self._extensions is None:
+            if strict:
+                raise ValueError(f"extension commands {sorted(commands)} given, but the scene has no extensions")
+            if not self._warned_extension_commands:
+                self._warned_extension_commands = True
+                print(f"warning: ignoring the extension commands {sorted(commands)}: the params have no extensions")
+            return
+        self._extensions.apply_commands(commands, strict=strict)
 
     @property
     def stats(self) -> CommandRuntimeStats:
@@ -265,6 +284,8 @@ class ControlCommandDispatcher:
         # step by refresh_body_wrenches, so the aerodynamics contribution can
         # be composed on top without either writer clobbering the other.
         self._last_body_wrenches = control_command.body_wrenches
+        # Extension commands ride with the rotor command: delayed, dropped or stale with it.
+        self._apply_extension_commands(control_command.extension_commands, strict=False)
         self._stats.last_applied_policy = "fresh"
         self.applied_command_count += 1
 
@@ -273,12 +294,18 @@ class ControlCommandDispatcher:
         data: mujoco.MjData,
         rotor_thrusts_by_uav: list[list[float]],
         body_wrenches: list[list[float]] | None = None,
+        extension_commands: dict[str, Any] | None = None,
     ) -> None:
-        """Apply a command directly, as a fresh command packet would be (in-process callers, no network)."""
+        """Apply a command directly, as a fresh command packet would be (in-process callers, no network).
+
+        ``extension_commands``: {extension name: command}, as the ``extensions`` field of a command
+        packet; a command an extension cannot use raises here (a packet's is ignored with a warning).
+        """
         if len(rotor_thrusts_by_uav) != self._num_uavs:
             raise ValueError(f"expected rotor thrusts for {self._num_uavs} UAV(s), got {len(rotor_thrusts_by_uav)}")
         if body_wrenches is not None and len(body_wrenches) != self._num_uavs:
             raise ValueError(f"expected body wrenches for {self._num_uavs} UAV(s), got {len(body_wrenches)}")
+        self._apply_extension_commands(extension_commands, strict=True)
         self._last_command = [[float(thrust) for thrust in rotor_thrusts] for rotor_thrusts in rotor_thrusts_by_uav]
         apply_thrust_command(data, self._last_command)
         self._last_body_wrenches = None if body_wrenches is None else [[float(value) for value in wrench] for wrench in body_wrenches]

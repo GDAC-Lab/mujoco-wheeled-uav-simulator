@@ -139,6 +139,7 @@ def build_state_payload(
     state_format: str = "json",
     measurements: list[MeasuredState] | None = None,
     plant_snapshot: list[dict[str, Any]] | None = None,
+    extension_states: dict[str, Any] | None = None,
 ) -> bytes:
     """Serialize the scene state into a single-UAV or multi-UAV state packet.
 
@@ -148,7 +149,8 @@ def build_state_payload(
     with the contact summaries but without the per-contact details.
     `measurements` (one per UAV, from the plant's sensor model) replace the
     true state in the measured fields; `plant_snapshot` adds the per-UAV
-    ``plant`` block (JSON only).
+    ``plant`` block (JSON only). `extension_states` ({name: state}, from the
+    scene's extensions) is sent as the top-level ``extensions`` object (JSON only).
     """
     if contact_reports is None:
         contact_reports = build_contact_reports(
@@ -193,8 +195,12 @@ def build_state_payload(
     }
     if timing is not None:
         packet["timing"] = timing
+    if extension_states:
+        packet["extensions"] = extension_states
 
     if state_format == "binary":
+        if extension_states:
+            raise ValueError("binary state packets carry no extension states; use the JSON state format")
         return encode_state_packet(packet, uav_states)
     if len(uav_states) == 1:
         return json.dumps(
@@ -319,6 +325,7 @@ class StatePayloadPublisher:
         contact_reports: list[dict[str, Any]] | None = None,
     ) -> bytes:
         plant = self._plant
+        extensions = getattr(self._scene, "extensions", None)
         return build_state_payload(
             self._scene,
             realtime_factor,
@@ -332,6 +339,7 @@ class StatePayloadPublisher:
             state_format=self._state_format,
             measurements=None if plant is None else plant.measure(self._scene.data),
             plant_snapshot=None if plant is None else plant.snapshot(),
+            extension_states=None if extensions is None else extensions.states(self._scene.model, self._scene.data),
         )
 
     def send_state(

@@ -269,7 +269,9 @@ def build_hover_command_payload_with_metadata(
     wall_time_send_ns: int | None = None,
     fidelity_mode: str | None = None,
     protocol_version: int = 2,
+    extensions: dict[str, Any] | None = None,
 ) -> bytes:
+    """The command packet; ``extensions``: {extension name: command} for the scene's extensions."""
     payload: dict[str, Any] = {}
     if sequence is not None:
         payload["protocol_version"] = int(protocol_version)
@@ -286,6 +288,8 @@ def build_hover_command_payload_with_metadata(
         payload["rotor_omega"] = rotor_omega.tolist()
     else:
         payload["rotor_thrusts"] = rotor_thrusts.tolist()
+    if extensions:
+        payload["extensions"] = extensions
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 

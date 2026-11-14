@@ -259,8 +259,10 @@ classdef Protocol
         function control_command = build_control_command(rotor_thrusts, command_options, varargin)
             % Name-value options: sequence, source_state_sequence,
             % wall_time_send_ns, controller_compute_ms, state_age_ms,
-            % state_sequence_gap (numeric scalars or []), fidelity_mode (text)
-            % and body_wrench (6 numbers or []). Names match as with
+            % state_sequence_gap (numeric scalars or []), fidelity_mode (text),
+            % body_wrench (6 numbers or []) and extensions (a struct of
+            % extension name -> command, e.g. struct('goal', struct('position',
+            % [1 0 1])), or []; docs/EXTENSIONS.md). Names match as with
             % inputParser (case-insensitive, unique prefixes, an options struct
             % expands) but are parsed by hand: this runs once per UAV and
             % control period, and an inputParser costs about 0.3 ms per call.
@@ -274,6 +276,9 @@ classdef Protocol
             end
             if strcmp(command_options.input_mode, 'omega')
                 control_command.rotor_omega = uavsim.Protocol.thrust_to_rotor_omega(rotor_thrusts, command_options.thrust_coefficient)';
+            end
+            if ~isempty(options.extensions)
+                control_command.extensions = options.extensions;
             end
 
             if ~isempty(options.sequence)
@@ -293,6 +298,11 @@ classdef Protocol
         end
 
         function send_control_command(controller_socket, control_command, target_ip, target_port)
+            write(controller_socket, uavsim.Protocol.encode_control_command(control_command), "string", target_ip, target_port);
+        end
+
+        function text = encode_control_command(control_command)
+            % The JSON text of the command packet send_control_command sends.
             message = struct();
             if isfield(control_command, 'packet_metadata')
                 metadata = control_command.packet_metadata;
@@ -310,10 +320,19 @@ classdef Protocol
             if isfield(control_command, 'body_wrench')
                 message.body_wrench = control_command.body_wrench;
             end
-            write(controller_socket, jsonencode(message), "string", target_ip, target_port);
+            if isfield(control_command, 'extensions')
+                message.extensions = control_command.extensions;
+            end
+            text = jsonencode(message);
         end
 
         function send_multi_uav_control_command(controller_socket, control_commands, command_options, target_ip, target_port)
+            text = uavsim.Protocol.encode_multi_uav_control_command(control_commands, command_options);
+            write(controller_socket, text, "string", target_ip, target_port);
+        end
+
+        function text = encode_multi_uav_control_command(control_commands, command_options)
+            % The JSON text of the command packet send_multi_uav_control_command sends.
             num_uavs = numel(control_commands);
             command_matrix = zeros(num_uavs, 4);
             for uav_index = 1:num_uavs
@@ -347,7 +366,25 @@ classdef Protocol
             if has_wrench
                 message.body_wrenches = body_wrenches;
             end
-            write(controller_socket, jsonencode(message), "string", target_ip, target_port);
+            % Extension commands belong to the scene, not to one UAV: the
+            % extensions of every per-UAV command go into one object (for a
+            % name given twice, the later UAV's command is sent).
+            extensions = struct();
+            has_extensions = false;
+            for uav_index = 1:num_uavs
+                if isstruct(control_commands{uav_index}) && isfield(control_commands{uav_index}, 'extensions')
+                    given = control_commands{uav_index}.extensions;
+                    names = fieldnames(given);
+                    for name_index = 1:numel(names)
+                        extensions.(names{name_index}) = given.(names{name_index});
+                    end
+                    has_extensions = true;
+                end
+            end
+            if has_extensions
+                message.extensions = extensions;
+            end
+            text = jsonencode(message);
         end
 
         function values = displayed_command_values(control_command, command_options)
@@ -488,7 +525,8 @@ classdef Protocol
                 'state_age_ms', [], ...
                 'state_sequence_gap', [], ...
                 'fidelity_mode', default_fidelity_mode, ...
-                'body_wrench', [] ...
+                'body_wrench', [], ...
+                'extensions', [] ...
             );
             if isscalar(args) && isstruct(args{1})
                 args = reshape([fieldnames(args{1})'; struct2cell(args{1})'], 1, []);
@@ -517,6 +555,8 @@ classdef Protocol
                         is_valid = ischar(value) || (isstring(value) && isscalar(value));
                     case 'body_wrench'
                         is_valid = isempty(value) || (isnumeric(value) && numel(value) == 6);
+                    case 'extensions'
+                        is_valid = isempty(value) || (isstruct(value) && isscalar(value));
                     otherwise
                         is_valid = isempty(value) || (isnumeric(value) && isscalar(value));
                 end

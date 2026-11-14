@@ -12,6 +12,8 @@ English documentation: [README.md](README.md)
 
 **プラントモデル**（任意。ロータのむだ時間と遅れ、推力の較正誤差、電池の電圧降下、抗力と地面効果、データで当てはめた補正、センサの遅れ・雑音・バイアス・欠測、パラメータのランダム化）とプロセス内の `Simulator`: [docs/PLANT_MODEL.ja.md](docs/PLANT_MODEL.ja.md)。飛行ログからの**システム同定**（むだ時間、モータの時定数、推力の倍率、抗力、電池、k ステップ予測誤差）: [docs/SYSTEM_IDENTIFICATION.ja.md](docs/SYSTEM_IDENTIFICATION.ja.md)。英語版は同じ名前の `.md`。
 
+**シーンの拡張**（任意。自分の Python コードで場面にボディ・関節・それらにかかる力を足し、コントローラからの指令を受け、自分の状態を状態パケットで返す）: [docs/EXTENSIONS.ja.md](docs/EXTENSIONS.ja.md) — 英語版 [docs/EXTENSIONS.md](docs/EXTENSIONS.md)。
+
 `baseline` / `hil` の使い分けと、論文向けの fidelity 指標整理は [docs/FIDELITY_MODES.ja.md](docs/FIDELITY_MODES.ja.md) にまとめています。
 
 **時刻同期**（シミュレータ時刻・実時間・UDP サンプル周期）: [docs/TIMING.ja.md](docs/TIMING.ja.md) — 英語版 [docs/TIMING.md](docs/TIMING.md)。
@@ -147,6 +149,7 @@ MATLAB と Python の hover controller が共通で前提にしている単一 U
 - `position`, `velocity`, `angular_velocity_body` は 3 要素ベクトルです。
 - `rotation_matrix` は row-major の 3x3 回転行列を 1 次元化した 9 要素です。
 - controller から simulator への command packet は JSON object で、`rotor_thrusts` / `rotor_omega`（4 要素ベクトル）、または `wrench`（`[f_z, M_x, M_y, M_z]` の機体レンチ。ロータ幾何から導出したアロケーション行列の擬似逆で各ロータ推力へ分配）を持ちます。
+- パラメータにシーンの拡張があるときは、command packet に `extensions`（名前 → 指令）を入れられ、状態 packet は拡張の状態を `extensions` に持ちます（[docs/EXTENSIONS.ja.md](docs/EXTENSIONS.ja.md)）。
 - `hover-controller` は単一 UAV packet 専用で、`uavs` を含む複数 UAV packet を受けるとエラー終了します。
 - controller 側の推力配分（Python / MATLAB とも）は `actuation.rotors` の各ロータ幾何（位置・推力軸・回転方向）から導出されるため、JSON 上のロータ順序や固定傾斜ロータでも生成される MuJoCo actuator と常に整合します。
 
@@ -254,6 +257,7 @@ uv run mujoco-wheeled-uav-simulator check-model --num-uavs 3
 | `wheeled_uav/controllers/` | 参照コントローラ（`hover.py`）。MuJoCo なしで import できるため controller 専用ホストでも使えます。 |
 | `wheeled_uav/plant/` | プラントモデル（`plant` セクション）: アクチュエーション、電池、抗力と地面効果、データで当てはめた補正、センサ、ランダム化（[docs/PLANT_MODEL.ja.md](docs/PLANT_MODEL.ja.md)）。 |
 | `wheeled_uav/sim.py` | プロセス内の `Simulator`: 同じ場面とプラントを、UDP なしで Python から進めます。 |
+| `wheeled_uav/extensions/` | シーンの拡張（`extensions` セクション）: 読み込み、毎ステップの呼び出し、例の `Marker`（[docs/EXTENSIONS.ja.md](docs/EXTENSIONS.ja.md)）。 |
 | `wheeled_uav/flightlog.py`、`flightlog_ulog.py` | 中立の飛行ログ形式と、PX4 の ULog からの変換。 |
 | `wheeled_uav/sysid/` | システム同定と k ステップ予測誤差（[docs/SYSTEM_IDENTIFICATION.ja.md](docs/SYSTEM_IDENTIFICATION.ja.md)）。 |
 

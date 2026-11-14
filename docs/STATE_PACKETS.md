@@ -2,7 +2,7 @@
 
 The simulator publishes one state packet every `simulation.state_publish_every_n_steps` physics steps, as a single UDP datagram. `simulation.state_format` (or `simulate --state-format`) selects its encoding:
 
-- `json` (default): one JSON object. A single-UAV packet carries the vehicle's fields at the top level; a multi-UAV packet lists them under `uavs`. The `timing` block is described in [TIMING.md](TIMING.md).
+- `json` (default): one JSON object. A single-UAV packet carries the vehicle's fields at the top level; a multi-UAV packet lists them under `uavs`. The `timing` block is described in [TIMING.md](TIMING.md), the `extensions` object of scenes with extensions in [EXTENSIONS.md](EXTENSIONS.md).
 - `binary`: the same state in the fixed little-endian layout below. It is about a quarter of the size of the JSON packet and quicker for the simulator to build, and a team of up to about 170 UAVs fits one datagram (a JSON packet grows by about 1.5 KiB per UAV and passes the 65,507-byte limit of a UDP datagram at about 40 UAVs). Decoding takes about as long as `jsondecode` in MATLAB, whose JSON decoder is fast.
 
 Both decoders turn a binary packet into exactly what the JSON packet of the same state decodes to, so a controller can accept either:
@@ -10,7 +10,7 @@ Both decoders turn a binary packet into exactly what the JSON packet of the same
 - Python: `wheeled_uav.state_packets.decode_state_packet(datagram)` returns the `json.loads` dict.
 - MATLAB: `uavsim.Protocol.decode_state(datagram)` returns the `jsondecode` struct; `uavsim.Protocol.read_latest_state` uses it.
 
-Binary packets carry the contact summaries but not the per-contact details (`contacts` decodes to an empty list), and the simulator refuses to start with the binary format when the actuator stats (`logging_config.log_actuator_stats`), the sensor truth (`logging_config.log_sensor_truth`) or the aerodynamics log are switched on.
+Binary packets carry the contact summaries but not the per-contact details (`contacts` decodes to an empty list), and the simulator refuses to start with the binary format when the actuator stats (`logging_config.log_actuator_stats`), the sensor truth (`logging_config.log_sensor_truth`) or the aerodynamics log are switched on, and when the params have extensions.
 
 ## Binary layout (layout version 1)
 

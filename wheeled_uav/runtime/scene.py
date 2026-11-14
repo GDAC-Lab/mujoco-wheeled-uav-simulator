@@ -13,6 +13,7 @@ import numpy as np
 
 from ..calibration import apply_calibration_file
 from ..config import build_fidelity_config, load_vehicle_params
+from ..extensions import SceneExtensions, VehicleInfo, apply_spec_edits, load_extensions
 from ..model.builder import render_model_xml
 from ..plant import PlantConfig, apply_randomization, parse_plant_config, write_randomization_record
 from ..model.surface import get_surface_config
@@ -86,6 +87,10 @@ class RenderedModelArtifacts:
     # The values the randomization section drew (empty without one), and the file they were written to.
     randomization_draws: tuple[dict[str, Any], ...] = ()
     randomization_record_path: Path | None = None
+    # The extensions section, constructed (None: no extensions), and the spec they edited: the scene's
+    # model is compiled from it (model_xml_path is then MuJoCo's XML of it, for viewing).
+    extensions: SceneExtensions | None = None
+    spec: mujoco.MjSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,8 @@ class SimulationScene:
     plant: PlantConfig | None = None
     # The values the randomization section drew for this run (already in params).
     randomization_draws: tuple[dict[str, Any], ...] = ()
+    # The extensions section, bound to the model and reset (None: no extensions; wheeled_uav.extensions).
+    extensions: SceneExtensions | None = None
 
 
 def _get_sensor_slice(model: mujoco.MjModel, sensor_name: str) -> slice:
@@ -181,6 +188,7 @@ def render_simulation_model(
     # and geometry go into the XML, the plant parameters into the plant model.
     seed = resolve_seed_from_params(params, request.seed)
     params, draws = apply_randomization(params, seed=seed)
+    params_dir = resolver.get_params_path(request.params_path).parent
     model_xml_path, surface_evaluator, uav_specs = render_model_xml(
         params,
         instance_id=request.instance_id,
@@ -189,9 +197,24 @@ def render_simulation_model(
         template_path=request.template_path,
         generated_xml_dir=request.generated_xml_dir,
         path_resolver=resolver,
-        params_dir=resolver.get_params_path(request.params_path).parent,
+        params_dir=params_dir,
     )
     record_path = write_randomization_record(model_xml_path, seed, draws) if draws else None
+    # Extensions edit the rendered model (after randomization: their own settings may be drawn too).
+    extensions = load_extensions(params, params_dir)
+    extended_spec = None
+    if extensions is not None:
+        extended_xml_path = model_xml_path.with_name(f"{model_xml_path.stem}.extended.xml")
+        extended_spec = apply_spec_edits(
+            extensions,
+            model_xml_path,
+            vehicles=[VehicleInfo(index, uav.name, uav.body_name) for index, uav in enumerate(uav_specs)],
+            params=params,
+            params_dir=params_dir,
+            seed=seed,
+            output_path=extended_xml_path,
+        )
+        model_xml_path = extended_xml_path
     return RenderedModelArtifacts(
         params=params,
         model_xml_path=model_xml_path,
@@ -199,7 +222,15 @@ def render_simulation_model(
         uav_specs=uav_specs,
         randomization_draws=tuple(draws),
         randomization_record_path=record_path,
+        extensions=extensions,
+        spec=extended_spec,
     )
+
+
+def _compile(rendered_model: RenderedModelArtifacts) -> mujoco.MjModel:
+    if rendered_model.spec is not None:
+        return rendered_model.spec.compile()
+    return mujoco.MjModel.from_xml_path(str(rendered_model.model_xml_path))
 
 
 def _check_plant_against_hil_effects(plant: PlantConfig | None, fidelity: FidelityConfig) -> None:
@@ -243,9 +274,13 @@ def load_simulation_scene(
     resolver = path_resolver or DEFAULT_PATH_RESOLVER
     plant = parse_plant_config(rendered_model.params, params_dir=resolver.get_params_path(request.params_path).parent)
     _check_plant_against_hil_effects(plant, fidelity)
-    model = mujoco.MjModel.from_xml_path(str(rendered_model.model_xml_path))
+    model = _compile(rendered_model)
     data = mujoco.MjData(model)
     apply_initial_velocities(model, data, rendered_model.uav_specs)
+    extensions = rendered_model.extensions
+    if extensions is not None:
+        extensions.bind(model)
+        extensions.reset(model, data)
     mujoco.mj_forward(model, data)
     return SimulationScene(
         request=request,
@@ -262,6 +297,7 @@ def load_simulation_scene(
         path_resolver=path_resolver,
         plant=plant,
         randomization_draws=rendered_model.randomization_draws,
+        extensions=extensions,
     )
 
 
@@ -321,7 +357,7 @@ def validate_model(
 ) -> int:
     """Render the XML, compile the MuJoCo model, and print a JSON summary."""
     rendered_model = render_simulation_model(request, path_resolver=path_resolver)
-    model = mujoco.MjModel.from_xml_path(str(rendered_model.model_xml_path))
+    model = _compile(rendered_model)
     effective_fidelity_mode = request.fidelity_mode or build_fidelity_config(rendered_model.params).mode
 
     print(
@@ -341,6 +377,7 @@ def validate_model(
                 "randomization_record": None
                 if rendered_model.randomization_record_path is None
                 else str(rendered_model.randomization_record_path),
+                "extensions": [] if rendered_model.extensions is None else list(rendered_model.extensions.names),
             },
             ensure_ascii=False,
         )
