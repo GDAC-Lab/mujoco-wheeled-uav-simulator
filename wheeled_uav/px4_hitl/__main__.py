@@ -14,6 +14,7 @@ HITL では実モータ出力が無効化されているので実機は動かな
 from __future__ import annotations
 
 import argparse
+import contextlib
 
 from .bridge import HilConfig, run_bridge, run_check_link, run_diagnose
 from ..runtime.scene import SimulationRequest
@@ -67,13 +68,15 @@ def main() -> int:
         return 0 if (stats.heartbeat_ok and stats.controls_received > 0) else 1
 
     viewer_factory = None
+    viewers = contextlib.ExitStack()
     if args.viewer:
-        import mujoco.viewer
+        from ..runtime.visuals import open_passive_viewer
 
         def viewer_factory(model, data):  # noqa: F811
-            return mujoco.viewer.launch_passive(model, data)
+            return viewers.enter_context(open_passive_viewer(model, data))
 
-    stats = run_bridge(config, request, viewer_handle_factory=viewer_factory)
+    with viewers:  # closes the viewer and waits for its window to go before the process exits
+        stats = run_bridge(config, request, viewer_handle_factory=viewer_factory)
     print(
         f"finished: steps={stats.steps} sensor_sent={stats.sensor_sent} gps_sent={stats.gps_sent} "
         f"odom_sent={stats.odom_sent} ctrl_msgs={stats.controls_received} "

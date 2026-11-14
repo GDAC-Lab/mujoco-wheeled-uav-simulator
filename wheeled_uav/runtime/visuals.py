@@ -6,7 +6,10 @@ changes only what you see, never what the vehicles do.
 
 from __future__ import annotations
 
+import contextlib
 import math
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import mujoco
@@ -19,7 +22,30 @@ __all__ = [
     "FrameRecorder",
     "WallOverlayAnimator",
     "configure_viewer",
+    "open_passive_viewer",
 ]
+
+# How long leaving open_passive_viewer waits for the viewer thread to finish closing its window.
+VIEWER_CLOSE_TIMEOUT_S = 5.0
+
+
+@contextlib.contextmanager
+def open_passive_viewer(model: mujoco.MjModel, data: mujoco.MjData) -> Iterator[mujoco.viewer.Handle]:
+    """mujoco.viewer.launch_passive that, on leaving, waits until the viewer has closed its window.
+
+    The passive viewer draws on a daemon thread, and closing its handle only asks that thread to stop.
+    If the process exits while the thread is still tearing the window down, the glfw.terminate that the
+    viewer registers with atexit runs at the same time, and the process can end with an access violation.
+    """
+    before = set(threading.enumerate())
+    handle = mujoco.viewer.launch_passive(model, data)
+    viewer_threads = [thread for thread in threading.enumerate() if thread not in before and thread.daemon]
+    try:
+        yield handle
+    finally:
+        handle.close()
+        for thread in viewer_threads:
+            thread.join(VIEWER_CLOSE_TIMEOUT_S)
 
 
 def _wall_view_fit(model: mujoco.MjModel, params: dict, aspect: float = 16.0 / 9.0):

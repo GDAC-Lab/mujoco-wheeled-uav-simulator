@@ -34,7 +34,7 @@ from .scene import (
     resolve_timing_config,
 )
 from .state_publisher import StatePayloadPublisher
-from .visuals import FrameRecorder, WallOverlayAnimator, configure_viewer
+from .visuals import FrameRecorder, WallOverlayAnimator, configure_viewer, open_passive_viewer
 
 __all__ = [
     "SimulationRuntime",
@@ -335,7 +335,7 @@ def _run_lockstep_loop(scene: SimulationScene, sock, viewer: mujoco.viewer.Handl
 
 
 def run_viewer_loop(scene: SimulationScene, sock) -> None:
-    with mujoco.viewer.launch_passive(scene.model, scene.data) as viewer:
+    with open_passive_viewer(scene.model, scene.data) as viewer:
         configure_viewer(viewer, scene)
         if resolve_timing_config(scene).pacing_mode == "lockstep":
             _run_lockstep_loop(scene, sock, viewer)
