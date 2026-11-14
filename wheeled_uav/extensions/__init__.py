@@ -189,8 +189,13 @@ class SceneExtensions:
         return bool(self._hooks["before_step"])
 
     def edit_spec(self, spec: mujoco.MjSpec, context: ExtensionContext) -> None:
-        for _, method in self._hooks["edit_spec"]:
-            method(spec, context)
+        for name, method in self._hooks["edit_spec"]:
+            try:
+                method(spec, context)
+            except ExtensionError:
+                raise
+            except ValueError as error:  # MjSpec's own errors (a repeated name, a bad value)
+                raise ExtensionError(f"extensions.{name}: editing the model: {error}") from error
 
     def bind(self, model: mujoco.MjModel) -> None:
         for _, method in self._hooks["bind"]:
@@ -338,7 +343,17 @@ def apply_spec_edits(
         params_dir=Path(params_dir),
         seed=int(seed),
     )
+    actuators = len(spec.actuators)
     extensions.edit_spec(spec, context)
+    # The rotor commands own data.ctrl (every actuator, in the vehicles' order) and the timing
+    # follows the timestep: an extension acts through its own bodies, joints and forces instead.
+    if len(spec.actuators) != actuators:
+        raise ExtensionError(
+            f"extensions ({', '.join(extensions.names)}) must not add actuators: the rotor commands own data.ctrl; "
+            "apply forces in before_step (xfrc_applied of the extension's bodies, qfrc_applied of its joints)"
+        )
+    if float(spec.option.timestep) != context.timestep:
+        raise ExtensionError(f"extensions ({', '.join(extensions.names)}) must not change the timestep (simulation.timestep)")
     try:
         spec.compile()
     except ValueError as error:

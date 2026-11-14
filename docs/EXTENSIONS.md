@@ -80,7 +80,8 @@ class Box(Extension):
 ```
 
 Put it in a module of your repository and name it in the params:
-`"class": "my_extensions:Box", "path": "."`.
+`"class": "my_extensions:Box", "path": "."`. Module names are shared by the whole Python process,
+so give yours a distinctive name (the first module imported under a name is the one used).
 
 The simulator calls:
 
@@ -100,9 +101,13 @@ packets, and `body`, the body with the vehicle's free joint), the physics `times
 
 Rules that keep extensions from getting in each other's way:
 
-- **Touch only what the extension added**: the `xfrc_applied` rows, joints, actuators and mocap bodies
-  it created. The rotor commands, the vehicles' bodies and their `xfrc_applied` rows belong to the
-  simulator (the command dispatcher, the plant model and the aerodynamics model write them).
+- **Touch only what the extension added**: the `xfrc_applied` rows of its bodies, the
+  `qfrc_applied` entries of its joints, its mocap bodies. The rotor commands, the vehicles' bodies and
+  their `xfrc_applied` rows belong to the simulator (the command dispatcher, the plant model and the
+  aerodynamics model write them).
+- **No actuators, no other timestep**: the rotor commands own `data.ctrl`, every actuator of it, and
+  the timing follows `simulation.timestep`, so an `edit_spec` that adds an actuator or changes the
+  timestep is refused. Apply forces in `before_step` instead.
 - **Prefix the names** of what you add with the extension's name (`f"{self.name}_box"`), so that two
   entries of the same class do not clash.
 - **Check before changing**: an `apply_command` that cannot use a command raises (an `ExtensionError`,

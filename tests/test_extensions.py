@@ -190,6 +190,43 @@ def test_loader_errors_name_the_entry(tmp_path):
     assert load_extensions({}, tmp_path) is None
 
 
+class _AddsAnActuator(Extension):
+    def edit_spec(self, spec, context):
+        body = spec.worldbody.add_body(name="spinner")
+        body.add_joint(name="spinner_joint", type=mujoco.mjtJoint.mjJNT_HINGE)
+        body.add_geom(size=[0.05, 0.0, 0.0])
+        spec.add_actuator(target="spinner_joint", trntype=mujoco.mjtTrn.mjTRN_JOINT)
+
+
+class _ChangesTheTimestep(Extension):
+    def edit_spec(self, spec, context):
+        spec.option.timestep = context.timestep / 2
+
+
+class _RepeatsAName(Extension):
+    def edit_spec(self, spec, context):
+        spec.worldbody.add_body(name="twice")
+        spec.worldbody.add_body(name="twice")
+
+
+class _BreaksTheModel(Extension):
+    def edit_spec(self, spec, context):
+        spec.worldbody.add_body(name="massless").add_freejoint()  # a moving body without mass
+
+
+def test_extensions_may_not_take_the_controls_or_the_timestep_or_break_the_model(tmp_path):
+    for factory, message in (
+        (_AddsAnActuator, "must not add actuators"),
+        (_ChangesTheTimestep, "must not change the timestep"),
+        (_RepeatsAName, "extensions.bad: editing the model: .*repeated name 'twice'"),
+        (_BreaksTheModel, r"does not compile after the extensions' edits \(bad\)"),
+    ):
+        params = load_vehicle_params()
+        params["extensions"] = {"bad": {"class": factory}}
+        with pytest.raises(ExtensionError, match=message):
+            load_simulation_scene(SimulationRequest(generated_xml_dir=tmp_path, headless=True), params=params)
+
+
 def test_a_class_is_imported_from_a_folder_next_to_the_params_file(tmp_path):
     folder = tmp_path / "my_extensions"
     folder.mkdir()
