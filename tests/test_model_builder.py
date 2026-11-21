@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import unittest
 
+from pathlib import Path
+
+import pytest
+
 from wheeled_uav.config import load_vehicle_params
 from wheeled_uav.model.builder import build_rotor_specs, build_uav_model_specs, build_xml_replacements
 from wheeled_uav.model.surface import build_surface_blocks
@@ -442,6 +446,70 @@ def test_vehicle_without_wheels_spawns_on_the_terrain_and_rejects_a_wheel_based_
     drone["initial_spawn"]["center_x"] = 1.8
     (wall_pose,) = build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0, environment=wall)
     assert wall_pose.position[0] == 1.8
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _wall_contact_case():
+    import copy
+
+    from wheeled_uav.model.poses import build_surface_model_spec
+
+    params = load_vehicle_params()
+    drone = copy.deepcopy(params["drone"])
+    drone["initial_spawn"] = {"mode": "wall_contact"}
+    environment = {"wall_position": [2.0, 0.0, 3.0], "wall_size": [0.05, 20.0, 3.0]}
+    return drone, environment, build_surface_model_spec(params["environment"])
+
+
+def test_wall_contact_spawn_puts_several_uavs_in_a_row_along_the_wall():
+    """Every vehicle gets the same standoff from the wall; the ground ring would put one behind the wall face."""
+    from wheeled_uav.model.poses import build_initial_poses
+
+    drone, environment, terrain = _wall_contact_case()
+    (single,) = build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=1.5, environment=environment)
+    poses = build_initial_poses(drone, terrain, num_uavs=3, spawn_radius=1.5, environment=environment)
+    wall_face_x = environment["wall_position"][0] - environment["wall_size"][0]
+    for pose in poses:
+        assert pose.position[0] == pytest.approx(single.position[0], abs=1e-12)      # same standoff as a single UAV
+        assert pose.position[0] < wall_face_x
+        assert list(pose.quaternion) == pytest.approx(list(single.quaternion))
+    ys = [pose.position[1] for pose in poses]
+    assert ys == pytest.approx([single.position[1] - 1.5, single.position[1], single.position[1] + 1.5])
+    with pytest.raises(ValueError, match="along the wall"):
+        build_initial_poses(drone, terrain, num_uavs=2, spawn_radius=0.0, environment=environment)
+
+
+def test_wall_contact_spawn_refuses_a_rotated_wall_without_center_x():
+    """The standoff is measured along world x: against a rotated wall it would start the wheels inside the wall."""
+    from wheeled_uav.model.poses import build_initial_poses
+
+    drone, environment, terrain = _wall_contact_case()
+    environment["wall_euler"] = [0.0, 15.0, 0.0]
+    with pytest.raises(ValueError, match="unrotated wall"):
+        build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0, environment=environment)
+    drone["initial_spawn"]["center_x"] = 1.0                                         # the caller places it
+    (pose,) = build_initial_poses(drone, terrain, num_uavs=1, spawn_radius=0.0, environment=environment)
+    assert pose.position[0] == pytest.approx(1.0, abs=0.1)
+
+
+def test_vehicle_params_are_read_again_after_the_file_changes(tmp_path):
+    """A sweep that rewrites one params file and loads it each time must not get the first read back."""
+    import json
+    import os
+
+    from wheeled_uav.config import load_vehicle_params
+
+    source = json.loads((_REPO_ROOT / "vehicle_params.json").read_text(encoding="utf-8"))
+    path = tmp_path / "vehicle_params.json"
+    path.write_text(json.dumps(source), encoding="utf-8")
+    first = load_vehicle_params(path)["drone"]["mass"]
+    source["drone"]["mass"] = first + 0.25
+    path.write_text(json.dumps(source), encoding="utf-8")
+    state = path.stat()
+    os.utime(path, ns=(state.st_atime_ns, state.st_mtime_ns + 1_000_000))            # coarse clocks: force a new mtime
+    assert load_vehicle_params(path)["drone"]["mass"] == pytest.approx(first + 0.25)
 
 
 def _with_part_meshes(params, mesh_dir):

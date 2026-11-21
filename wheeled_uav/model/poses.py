@@ -67,6 +67,26 @@ def build_surface_spawn_positions(initial_position: list[float], num_uavs: int, 
     return positions
 
 
+def build_wall_spawn_positions(axle_center: list[float], num_uavs: int, spawn_radius: float) -> list[list[float]]:
+    """Axle positions for the "wall_contact" spawn: a row along the wall (world y), all at the same standoff.
+
+    The ground ring (build_surface_spawn_positions) spreads in x as well, which against a wall put one vehicle
+    behind the wall face and the others short of it. The row spans y0 - spawn_radius .. y0 + spawn_radius.
+    """
+    if num_uavs == 1:
+        return [[float(axle_center[0]), float(axle_center[1]), float(axle_center[2])]]
+    if spawn_radius <= 0.0:
+        raise ValueError(f"spawn_radius must be positive to place {num_uavs} UAVs along the wall")
+    return [
+        [
+            float(axle_center[0]),
+            float(axle_center[1] + spawn_radius * (2.0 * uav_index / (num_uavs - 1) - 1.0)),
+            float(axle_center[2]),
+        ]
+        for uav_index in range(num_uavs)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Surface-following spawn (wheels resting on the terrain)
 # ---------------------------------------------------------------------------
@@ -287,6 +307,14 @@ def _resolve_wall_contact_center_x(environment: dict[str, Any], drone: dict[str,
     wall_clearance = _DEFAULT_WALL_SPAWN_CLEARANCE_M
     if isinstance(spawn_cfg, dict) and "wall_clearance_m" in spawn_cfg:
         wall_clearance = float(spawn_cfg["wall_clearance_m"])
+    wall_euler = [float(angle) for angle in environment.get("wall_euler", [0.0, 0.0, 0.0])]
+    if any(abs(angle) > 1e-9 for angle in wall_euler):
+        # The standoff below is measured along world x from the face of an unrotated wall. Against a rotated wall it
+        # put the wheels inside the wall (15 deg about y: 0.1 m deep), so say so instead of spawning in contact.
+        raise ValueError(
+            'drone.initial_spawn.mode="wall_contact" places the wheels against an unrotated wall '
+            f"(environment.wall_euler is {wall_euler}); give drone.initial_spawn.center_x for a rotated wall"
+        )
     wall_position = environment["wall_position"]
     wall_size = environment["wall_size"]
     wall_face_x = float(wall_position[0]) - float(wall_size[0])
@@ -509,7 +537,7 @@ def build_initial_poses(
             float(drone["initial_position"][1]),
             float(drone["initial_position"][2]),
         ]
-        initial_positions = build_surface_spawn_positions(axle_center, num_uavs, spawn_radius)
+        initial_positions = build_wall_spawn_positions(axle_center, num_uavs, spawn_radius)
         poses = [
             get_wall_contact_initial_pose(drone, environment, x_coord=position[0], y_coord=position[1])
             for position in initial_positions

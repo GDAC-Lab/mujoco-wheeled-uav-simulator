@@ -54,7 +54,7 @@ def _package_version() -> str:
 def _add_model_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--instance-id", type=int, default=0, help="Simulation instance id used to derive default ports and XML output")
     subparser.add_argument("--num-uavs", type=int, default=1, help="Number of UAVs to place in a single MuJoCo world")
-    subparser.add_argument("--spawn-radius", type=float, default=1.5, help="Radius of the ring that places multiple UAVs around the spawn point (surface and wall_contact spawns; unused by explicit spawns and single-UAV runs)")
+    subparser.add_argument("--spawn-radius", type=float, default=1.5, help="Radius of the ring that places multiple UAVs around the spawn point (surface spawns), or half the length of the row along the wall (wall_contact spawns); unused by explicit spawns and single-UAV runs")
     subparser.add_argument("--params-file", default=None, help="Path to a vehicle_params.json file to load instead of the repository default")
     subparser.add_argument("--preset", default=None, metavar="NAME", help="Bundled parameter preset: NAME resolves to configs/vehicle_params.NAME.json (e.g. wall_demo). --params-file wins if both are given")
     subparser.add_argument("--xml-template-file", default=None, help="Path to a MuJoCo XML template file to use instead of wheeled_uav.template.xml")

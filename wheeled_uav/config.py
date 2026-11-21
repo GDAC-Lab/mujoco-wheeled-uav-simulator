@@ -110,7 +110,9 @@ def parse_total_mass(params: dict[str, Any]) -> float:
 
 
 @lru_cache(maxsize=8)
-def _load_vehicle_params_cached(resolved_params_path: str) -> dict[str, Any]:
+def _load_vehicle_params_cached(resolved_params_path: str, modified_ns: int = 0, size: int = 0) -> dict[str, Any]:
+    # modified_ns and size are part of the key only: a file rewritten in the same process (a sweep that edits one
+    # params file and builds a scene from it each time) is read again instead of answered from the first read.
     with Path(resolved_params_path).open("r", encoding="utf-8") as params_file:
         return json.load(params_file)
 
@@ -139,7 +141,10 @@ def load_vehicle_params(
     # Deep copy so callers can never mutate the cached dict: every consumer in
     # the process aliases the same parse otherwise, which silently corrupts
     # later loads (and cross-contaminates tests).
-    params = copy.deepcopy(_load_vehicle_params_cached(str(resolved_params_path)))
+    file_state = resolved_params_path.stat()
+    params = copy.deepcopy(
+        _load_vehicle_params_cached(str(resolved_params_path), file_state.st_mtime_ns, file_state.st_size)
+    )
     # Overlay measured propulsion calibration (actuation.calibration_file), so
     # every consumer of the params dict sees the bench-test values.
     return apply_calibration_file(params, Path(str(resolved_params_path)))

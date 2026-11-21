@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 import warnings
@@ -45,7 +46,10 @@ class LoadVehicleParamsTests(unittest.TestCase):
             params_path.write_text(json.dumps({"value": 1}), encoding="utf-8")
 
             first_params = load_vehicle_params(params_path=params_path)
+            state = params_path.stat()
             params_path.write_text(json.dumps({"value": 2}), encoding="utf-8")
+            # Same size and, on a coarse clock, the same mtime: this is the one case the cache cannot see.
+            os.utime(params_path, ns=(state.st_atime_ns, state.st_mtime_ns))
             cached_params = load_vehicle_params(params_path=params_path)
             clear_vehicle_params_cache()
             refreshed_params = load_vehicle_params(params_path=params_path)
