@@ -502,8 +502,14 @@ def build_initial_poses(
                 'drone.initial_spawn.yaw_deg applies to the "surface" and "explicit" modes; '
                 '"wall_contact" takes its attitude from b2_body/b3_body'
             )
-        base_pose = get_wall_contact_initial_pose(drone, environment)
-        initial_positions = build_surface_spawn_positions(base_pose.position, num_uavs, spawn_radius)
+        # get_wall_contact_initial_pose takes the axle position and moves the body origin
+        # itself, so the ring is laid out around the axle, not around that shifted origin.
+        axle_center = [
+            _resolve_wall_contact_center_x(environment, drone),
+            float(drone["initial_position"][1]),
+            float(drone["initial_position"][2]),
+        ]
+        initial_positions = build_surface_spawn_positions(axle_center, num_uavs, spawn_radius)
         poses = [
             get_wall_contact_initial_pose(drone, environment, x_coord=position[0], y_coord=position[1])
             for position in initial_positions

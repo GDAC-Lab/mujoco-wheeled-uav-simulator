@@ -20,6 +20,7 @@ from wheeled_uav.model.surface import (
     get_surface_config,
     surface_can_use_plane_geom,
 )
+from wheeled_uav.types import InitialPoseSpec
 
 
 class SurfaceBehaviorTests(unittest.TestCase):
@@ -184,6 +185,47 @@ class SurfaceBehaviorTests(unittest.TestCase):
         drone["initial_spawn"]["wall_clearance_m"] = 0.0
         touching_poses = build_initial_poses(drone, surface_spec, num_uavs=1, spawn_radius=1.0, environment=environment)
         self.assertAlmostEqual(touching_poses[0].position[0], 2.650, places=3)
+
+    def test_wall_contact_spawn_places_a_raised_axle_once(self) -> None:
+        offset_z = 0.01
+        drone = {
+            "initial_position": [0.0, 0.0, 0.5],
+            "initial_spawn": {
+                "mode": "wall_contact",
+                "wall_clearance_m": 0.0,
+                "b2_body": [0.0, 1.0, 0.0],
+                "b3_body": [0.640, 0.0, 0.768],
+            },
+            "wheels": {"offset_y": 0.2, "radius": 0.15, "offset_z": offset_z},
+        }
+        environment = {
+            "wall_position": [3.0, 0.0, 3.5],
+            "wall_size": [0.2, 2.5, 3.5],
+        }
+        surface_spec = build_surface_model_spec(
+            {
+                "surface": {
+                    "mode": "plane",
+                    "solref": [0.01, 1.0],
+                    "contact": {"contype": 1, "conaffinity": 1},
+                    "follow_surface_for_initial_position": False,
+                    "plane": {"size": [3.0, 3.0, 0.1]},
+                }
+            }
+        )
+
+        def axle(pose: InitialPoseSpec) -> np.ndarray:
+            assert pose.quaternion is not None
+            w, x, y, z = pose.quaternion
+            b3 = np.array([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)])
+            return np.asarray(pose.position) + offset_z * b3
+
+        (pose,) = build_initial_poses(drone, surface_spec, num_uavs=1, spawn_radius=1.0, environment=environment)
+        # The wheels touch the wall face (2.8) as in the model without the axle height; only the origin moves.
+        self.assertTrue(np.allclose(axle(pose), [2.650, 0.0, 0.5], atol=1.0e-12))
+
+        ring = build_initial_poses(drone, surface_spec, num_uavs=2, spawn_radius=1.0, environment=environment)
+        self.assertTrue(np.allclose(np.mean([axle(ring_pose) for ring_pose in ring], axis=0), axle(pose), atol=1.0e-12))
 
     def test_composite_surface_matches_analytic_height_and_gradient(self) -> None:
         # Composite surface: h = 0.2x - 0.2y + 0.5 exp(-((x+1)^2+(y-0.2)^2)/0.3)
