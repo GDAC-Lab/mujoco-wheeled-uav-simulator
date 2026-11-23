@@ -276,6 +276,32 @@ def test_odometry_frame_is_local_ned_with_a_normalized_quaternion():
     assert np.allclose(args[6], [1.0, 0.0, 0.0, 0.0])
 
 
+def test_armed_follows_the_actuator_controls_mode():
+    """PX4 sends HIL_ACTUATOR_CONTROLS with every output and sets the armed flag in its mode; the HEARTBEAT is 1 Hz."""
+    from types import SimpleNamespace
+
+    from wheeled_uav.px4_hitl.link import MAV_MODE_FLAG_SAFETY_ARMED, Px4HilLink
+
+    def message(kind, **fields):
+        return SimpleNamespace(get_type=lambda: kind, get_msgbuf=lambda: b"", **fields)
+
+    queue = []
+    link = Px4HilLink.__new__(Px4HilLink)          # no serial port: pump() reads the queued messages
+    link.conn = SimpleNamespace(recv_match=lambda blocking: queue.pop(0) if queue else None)
+    link._forward = None
+    link.msg_counts, link.controls_count, link.armed, link.custom_mode = {}, 0, False, 0
+    controls = [0.1] * 16
+    queue.append(message("HIL_ACTUATOR_CONTROLS", controls=controls, mode=1 | 32 | MAV_MODE_FLAG_SAFETY_ARMED))
+    link.pump()
+    assert link.armed                               # armed before the next HEARTBEAT
+    queue.append(message("HIL_ACTUATOR_CONTROLS", controls=controls, mode=1 | 32))
+    link.pump()
+    assert not link.armed
+    queue.append(message("HEARTBEAT", base_mode=MAV_MODE_FLAG_SAFETY_ARMED, custom_mode=0))
+    link.pump()
+    assert link.armed and link.controls_count == 2  # the HEARTBEAT still sets it too
+
+
 def test_axis_flip_is_involution():
     assert np.allclose(AXIS_FLIP @ AXIS_FLIP, np.eye(3))
 

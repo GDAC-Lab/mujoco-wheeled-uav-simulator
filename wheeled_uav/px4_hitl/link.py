@@ -199,6 +199,9 @@ class Px4HilLink:
                 self.latest_controls = [float(v) for v in msg.controls]
                 self.latest_controls_wall_time = time.monotonic()
                 self.controls_count += 1
+                # PX4 sets MAV_MODE_FLAG_SAFETY_ARMED in the mode of every HIL_ACTUATOR_CONTROLS (one per actuator
+                # output), so the arm state follows within an output instead of waiting for the 1 Hz HEARTBEAT
+                self.armed = bool(int(getattr(msg, "mode", 0)) & MAV_MODE_FLAG_SAFETY_ARMED)
             elif kind == "HEARTBEAT":
                 self.last_heartbeat_wall_time = time.monotonic()
                 self.armed = bool(int(getattr(msg, "base_mode", 0)) & MAV_MODE_FLAG_SAFETY_ARMED)
