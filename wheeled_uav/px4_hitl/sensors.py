@@ -13,9 +13,12 @@ as ``(w, x, y, z) -> (w, x, -y, -z)`` (roll invariant, pitch/yaw negated).
 
 The IMU is derived analytically from the simulator's existing frame sensors
 (no model changes): the accelerometer is the specific force
-``R^T (dv/dt - g)`` with the linear acceleration taken as a one-step finite
-difference of the sensed world velocity. At the physics timestep (~2 ms) this
-matches a MuJoCo accelerometer site closely enough for HIL purposes.
+``R^T (dv/dt - g)`` with the linear acceleration taken as the finite difference
+of the sensed world velocity since the previous sample, divided by the
+simulated time between the two samples. This is the mean acceleration over the
+sample interval, so it does not depend on how many physics steps lie between
+samples. The first sample after construction or ``reset()`` reports zero
+linear acceleration (gravity only).
 """
 
 from __future__ import annotations
@@ -79,7 +82,6 @@ class HilSensorExtractor:
         origin_alt_m: float = 488.0,
     ):
         self._model = model
-        self._timestep = float(model.opt.timestep)
         self._mag_ned = np.asarray(mag_ned_gauss, dtype=float)
         self._origin_alt_m = float(origin_alt_m)
         self._adr = {
@@ -87,6 +89,7 @@ class HilSensorExtractor:
             for key in ("position", "linear_velocity", "angular_velocity", "x_axis", "y_axis", "z_axis")
         }
         self._prev_vel_w: np.ndarray | None = None
+        self._prev_time: float | None = None
 
     def _sensor_adr(self, name: str) -> int:
         sensor_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_SENSOR, name)
@@ -100,6 +103,7 @@ class HilSensorExtractor:
 
     def reset(self) -> None:
         self._prev_vel_w = None
+        self._prev_time = None
 
     def sample(self, data: mujoco.MjData) -> HilSensorSample:
         pos_w = self._read(data, "position")
@@ -108,11 +112,15 @@ class HilSensorExtractor:
         # Body axes in world coordinates = columns of R (body -> world)
         r_wb = np.column_stack([self._read(data, "x_axis"), self._read(data, "y_axis"), self._read(data, "z_axis")])
 
-        if self._prev_vel_w is None:
+        # Mean acceleration since the previous sample. Dividing by one physics timestep would scale
+        # it by the number of steps between samples (the bridge samples every sensor_every_n_steps).
+        time_s = float(data.time)
+        if self._prev_vel_w is None or self._prev_time is None or time_s <= self._prev_time:
             accel_w = np.zeros(3)
         else:
-            accel_w = (vel_w - self._prev_vel_w) / self._timestep
+            accel_w = (vel_w - self._prev_vel_w) / (time_s - self._prev_time)
         self._prev_vel_w = vel_w
+        self._prev_time = time_s
 
         specific_force_body = r_wb.T @ (accel_w - GRAVITY_W)
         accel_frd = AXIS_FLIP @ specific_force_body

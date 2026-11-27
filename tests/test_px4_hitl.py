@@ -121,6 +121,73 @@ def test_static_sample_matches_gravity_and_frames(scene):
     assert 900.0 < sample.abs_pressure_hpa < 1013.0
 
 
+
+def _free_joint_qvel_adr(scene) -> int:
+    model = scene.model
+    body = model.body(scene.uav_specs[0].body_name)
+    joint_id = int(body.jntadr[0])
+    assert model.jnt_type[joint_id] == mujoco.mjtJoint.mjJNT_FREE
+    return int(model.jnt_dofadr[joint_id])
+
+
+def _samples_under_constant_accel(scene, accel_w, physics_dt, every_n, count):
+    """Level vehicle, world velocity v(t) = a t, sampled every `every_n` physics steps."""
+    model, data = scene.model, scene.data
+    mujoco.mj_resetData(model, data)
+    dof = _free_joint_qvel_adr(scene)
+    extractor = make_extractor(scene)
+    samples = []
+    for k in range(count):
+        t = k * every_n * physics_dt
+        data.time = t
+        data.qvel[:] = 0.0
+        data.qvel[dof:dof + 3] = np.asarray(accel_w) * t
+        mujoco.mj_forward(model, data)
+        samples.append(extractor.sample(data))
+    mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+    return samples
+
+
+@pytest.mark.parametrize("every_n", [1, 2, 4])
+def test_accel_is_mean_over_sample_interval_for_any_step_count(scene, every_n):
+    # 同じ動き（一定の加速度）なら、何ステップごとに取っても同じ加速度を出す（前は n 倍になっていた）
+    accel_w = np.array([0.6, -0.4, 1.5])            # NWU world [m/s^2]
+    physics_dt = float(scene.model.opt.timestep)
+    samples = _samples_under_constant_accel(scene, accel_w, physics_dt, every_n, count=6)
+    assert samples[0].quat_ned == pytest.approx([1.0, 0.0, 0.0, 0.0], abs=1e-9)   # level: body = world axes
+    expected = AXIS_FLIP @ (accel_w - np.array([0.0, 0.0, -9.80665]))
+    for sample in samples[1:]:
+        assert sample.accel_frd == pytest.approx(expected, abs=1e-6)
+
+
+def test_first_sample_and_reset_report_gravity_only(scene):
+    accel_w = np.array([0.0, 0.0, 3.0])
+    physics_dt = float(scene.model.opt.timestep)
+    first = _samples_under_constant_accel(scene, accel_w, physics_dt, every_n=2, count=1)[0]
+    # 前のサンプルが無いので運動の加速度は 0（重力の分だけ）。いままでと同じ扱い
+    assert first.accel_frd == pytest.approx([0.0, 0.0, -9.80665], abs=1e-9)
+
+    model, data = scene.model, scene.data
+    dof = _free_joint_qvel_adr(scene)
+    extractor = make_extractor(scene)
+    for t, vz in ((0.010, 0.0), (0.012, 0.006)):
+        data.time = t
+        data.qvel[:] = 0.0
+        data.qvel[dof + 2] = vz
+        mujoco.mj_forward(model, data)
+        moving = extractor.sample(data)
+    assert moving.accel_frd[2] == pytest.approx(-(3.0 + 9.80665), abs=1e-6)
+    extractor.reset()
+    after_reset = extractor.sample(data)
+    assert after_reset.accel_frd == pytest.approx([0.0, 0.0, -9.80665], abs=1e-9)
+    # 時刻が進んでいない 2 回目（同じ data を続けて読む）も 0 で割らない
+    again = extractor.sample(data)
+    assert again.accel_frd == pytest.approx([0.0, 0.0, -9.80665], abs=1e-9)
+    mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+
+
 def test_yaw_sign_flips_between_nwu_and_ned(scene):
     model, data = scene.model, scene.data
     mujoco.mj_resetData(model, data)
